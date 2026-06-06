@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ACE · Neural Avatar</title>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #root {
+      height: 100%;
+      width: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    body { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    #root {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ---- Square stage that holds the avatar + all overlays ---- */
+    .stage {
+      position: relative;
+      width: min(92vmin, 980px);
+      aspect-ratio: 1 / 1;
+      background: #000;
+      isolation: isolate;
+    }
+
+    /* Ambient aura behind the head */
+    .aura {
+      position: absolute;
+      left: 50%;
+      top: 44%;
+      width: 78%;
+      height: 92%;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(ellipse 50% 50% at 50% 50%,
+        rgba(120,170,235,0.30) 0%,
+        rgba(90,140,220,0.14) 38%,
+        rgba(60,100,180,0.05) 60%,
+        transparent 72%);
+      filter: blur(6px);
+      z-index: 0;
+      animation: aura 9s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes aura {
+      0%, 100% { opacity: 0.45; transform: translate(-50%, -50%) scale(1); }
+      50%      { opacity: 0.85; transform: translate(-50%, -50%) scale(1.05); }
+    }
+
+    /* Base avatar image — the entire face breathes */
+    .face {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      z-index: 1;
+      animation: breathe 7.5s ease-in-out infinite;
+      will-change: filter, transform;
+    }
+    @keyframes breathe {
+      0%, 100% {
+        transform: scale(1);
+        filter: brightness(0.9) contrast(1.02)
+                drop-shadow(0 0 16px rgba(150,200,255,0.20));
+      }
+      50% {
+        transform: scale(1.012);
+        filter: brightness(1.14) contrast(1.05)
+                drop-shadow(0 0 42px rgba(170,210,255,0.5));
+      }
+    }
+
+    /* Duplicate of the face, screen-blended, flickering — makes nodes twinkle */
+    .flicker {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      mix-blend-mode: screen;
+      z-index: 2;
+      pointer-events: none;
+      will-change: opacity;
+    }
+    .flicker.a { animation: flickerA 2.3s steps(1, end) infinite; }
+    .flicker.b { animation: flickerB 3.7s steps(1, end) infinite; }
+    @keyframes flickerA {
+      0%   { opacity: 0.05; }
+      18%  { opacity: 0.28; }
+      26%  { opacity: 0.10; }
+      48%  { opacity: 0.34; }
+      60%  { opacity: 0.12; }
+      82%  { opacity: 0.30; }
+      100% { opacity: 0.06; }
+    }
+    @keyframes flickerB {
+      0%   { opacity: 0.10; }
+      30%  { opacity: 0.22; }
+      44%  { opacity: 0.07; }
+      70%  { opacity: 0.26; }
+      88%  { opacity: 0.09; }
+      100% { opacity: 0.14; }
+    }
+
+    /* Particle canvas — dots travelling along neural lines */
+    .particles {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 3;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+
+    /* Glow overlays positioned over key features */
+    .glow {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 4;
+      will-change: opacity, transform;
+    }
+
+    /* Eyes */
+    .eye {
+      width: 8%;
+      height: 6%;
+      background: radial-gradient(circle at 50% 50%,
+        rgba(255,255,255,0.95) 0%,
+        rgba(190,225,255,0.7) 22%,
+        rgba(120,180,255,0.3) 48%,
+        transparent 70%);
+      filter: blur(1px);
+    }
+    .eye.left  { left: 37.0%; top: 49.0%; animation: eyePulse 3.1s ease-in-out infinite; }
+    .eye.right { left: 62.6%; top: 48.7%; animation: eyePulse 3.1s ease-in-out infinite 0.15s; }
+    @keyframes eyePulse {
+      0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.85); }
+      50%      { opacity: 1;    transform: translate(-50%, -50%) scale(1.22); }
+    }
+
+    /* ACE chip aura */
+    .ace {
+      left: 50%;
+      top: 34.4%;
+      width: 22%;
+      height: 22%;
+      background: radial-gradient(circle at 50% 50%,
+        rgba(210,235,255,0.55) 0%,
+        rgba(140,190,255,0.28) 30%,
+        rgba(90,150,235,0.12) 52%,
+        transparent 70%);
+      filter: blur(2px);
+      animation: acePulse 3.6s ease-in-out infinite;
+    }
+    @keyframes acePulse {
+      0%, 100% { opacity: 0.4;  transform: translate(-50%, -50%) scale(0.82); }
+      50%      { opacity: 0.95; transform: translate(-50%, -50%) scale(1.08); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .face, .flicker, .eye, .ace, .aura { animation: none; }
+      .flicker { opacity: 0.18; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useRef, useEffect } = React;
+
+    // ----- Neural-line particle field (dots travelling between nearby nodes) -----
+    function useNeuralParticles(canvasRef) {
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        let raf, nodes = [], edges = [], travellers = [], W = 0, H = 0, dpr = 1;
+        let running = true;
+
+        // Head silhouette (ellipse, normalised to stage)
+        const HEAD = { cx: 0.5, cy: 0.46, rx: 0.275, ry: 0.42 };
+        const inHead = (nx, ny) => {
+          const dx = (nx - HEAD.cx) / HEAD.rx;
+          const dy = (ny - HEAD.cy) / HEAD.ry;
+          return dx * dx + dy * dy <= 1;
+        };
+
+        function build() {
+          const rect = canvas.getBoundingClientRect();
+          dpr = Math.min(window.devicePixelRatio || 1, 2);
+          W = rect.width; H = rect.height;
+          canvas.width = Math.round(W * dpr);
+          canvas.height = Math.round(H * dpr);
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+          // Scatter nodes inside the head ellipse
+          nodes = [];
+          const target = 150;
+          let guard = 0;
+          while (nodes.length < target && guard < target * 40) {
+            guard++;
+            const nx = Math.random();
+            const ny = Math.random();
+            if (!inHead(nx, ny)) continue;
+            nodes.push({ x: nx * W, y: ny * H });
+          }
+
+          // Connect each node to a few nearby neighbours
+          edges = [];
+          const maxD = Math.min(W, H) * 0.12;
+          for (let i = 0; i < nodes.length; i++) {
+            const cand = [];
+            for (let j = 0; j < nodes.length; j++) {
+              if (i === j) continue;
+              const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+              if (d < maxD) cand.push({ j, d });
+            }
+            cand.sort((a, b) => a.d - b.d);
+            cand.slice(0, 3).forEach((c) => {
+              if (i < c.j) edges.push([i, c.j]);
+            });
+          }
+          if (!edges.length) return;
+
+          // Spawn travelling dots on random edges
+          travellers = [];
+          const count = 46;
+          for (let k = 0; k < count; k++) travellers.push(spawn());
+        }
+
+        function spawn() {
+          const e = edges[(Math.random() * edges.length) | 0];
+          return {
+            e,
+            t: Math.random(),
+            speed: 0.004 + Math.random() * 0.01,
+            size: 0.7 + Math.random() * 1.4,
+            life: 0,
+          };
+        }
+
+        function frame() {
+          if (!running) return;
+          ctx.clearRect(0, 0, W, H);
+          for (let i = 0; i < travellers.length; i++) {
+            const tr = travellers[i];
+            tr.t += tr.speed;
+            tr.life += 1;
+            if (tr.t >= 1) {
+              // Hop to a connected edge sharing the arrival node
+              const arrive = tr.e[1];
+              const next = edges.filter((ed) => ed[0] === arrive || ed[1] === arrive);
+              if (next.length && Math.random() < 0.85) {
+                const ne = next[(Math.random() * next.length) | 0];
+                tr.e = ne[0] === arrive ? ne : [ne[1], ne[0]];
+                tr.t = 0;
+              } else {
+                travellers[i] = spawn();
+                continue;
+              }
+            }
+            const a = nodes[tr.e[0]];
+            const b = nodes[tr.e[1]];
+            if (!a || !b) { travellers[i] = spawn(); continue; }
+            const x = a.x + (b.x - a.x) * tr.t;
+            const y = a.y + (b.y - a.y) * tr.t;
+            // fade in/out across the edge
+            const edgeFade = Math.sin(tr.t * Math.PI);
+            const flick = 0.65 + 0.35 * Math.sin(tr.life * 0.25 + i);
+            const alpha = edgeFade * flick;
+
+            ctx.beginPath();
+            ctx.fillStyle = "rgba(220,238,255," + (alpha * 0.95).toFixed(3) + ")";
+            ctx.shadowColor = "rgba(170,210,255,0.9)";
+            ctx.shadowBlur = 6;
+            ctx.arc(x, y, tr.size, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          raf = requestAnimationFrame(frame);
+        }
+
+        build();
+        frame();
+        const onResize = () => { build(); };
+        window.addEventListener("resize", onResize);
+        return () => {
+          running = false;
+          cancelAnimationFrame(raf);
+          window.removeEventListener("resize", onResize);
+        };
+      }, [canvasRef]);
+    }
+
+    function Avatar() {
+      const canvasRef = useRef(null);
+      useNeuralParticles(canvasRef);
+
+      const SRC = "public/ace-avatar.png";
+      return (
+        <div className="stage">
+          <div className="aura" />
+          <img className="face" src={SRC} alt="ACE neural avatar" draggable="false" />
+          <img className="flicker a" src={SRC} alt="" aria-hidden="true" draggable="false" />
+          <img className="flicker b" src={SRC} alt="" aria-hidden="true" draggable="false" />
+          <canvas className="particles" ref={canvasRef} />
+          <div className="glow ace" />
+          <div className="glow eye left" />
+          <div className="glow eye right" />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<Avatar />);
+  </script>
+</body>
+</html>

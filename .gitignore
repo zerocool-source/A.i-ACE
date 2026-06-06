@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+*.tsbuildinfo
+
+# Logs / env
+*.log
+.env
+.env.local
+.DS_Store
+
+# ACE_MASTER.glb is intentionally excluded: the source export was an empty
+# 132-byte scene (0 meshes) and is not a deployable asset. Do not commit it.
+ACE_MASTER.glb
+**/ACE_MASTER.glb

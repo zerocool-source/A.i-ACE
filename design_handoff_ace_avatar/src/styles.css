@@ -1,0 +1,165 @@
+:root { color-scheme: dark; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  background: #000;
+  overflow: hidden;
+}
+body { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+#root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Square stage holding the avatar + all overlays */
+.stage {
+  position: relative;
+  width: min(92vmin, 980px);
+  aspect-ratio: 1 / 1;
+  background: #000;
+  isolation: isolate;
+}
+
+/* Ambient aura behind the head */
+.aura {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  width: 78%;
+  height: 92%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(ellipse 50% 50% at 50% 50%,
+    rgba(120,170,235,0.30) 0%,
+    rgba(90,140,220,0.14) 38%,
+    rgba(60,100,180,0.05) 60%,
+    transparent 72%);
+  filter: blur(6px);
+  z-index: 0;
+  animation: aura 9s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes aura {
+  0%, 100% { opacity: 0.45; transform: translate(-50%, -50%) scale(1); }
+  50%      { opacity: 0.85; transform: translate(-50%, -50%) scale(1.05); }
+}
+
+/* Base avatar image — the entire face breathes */
+.face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  z-index: 1;
+  animation: breathe 7.5s ease-in-out infinite;
+  will-change: filter, transform;
+}
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    filter: brightness(0.9) contrast(1.02)
+            drop-shadow(0 0 16px rgba(150,200,255,0.20));
+  }
+  50% {
+    transform: scale(1.012);
+    filter: brightness(1.14) contrast(1.05)
+            drop-shadow(0 0 42px rgba(170,210,255,0.5));
+  }
+}
+
+/* Screen-blended duplicate, flickering — makes nodes twinkle */
+.flicker {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  mix-blend-mode: screen;
+  z-index: 2;
+  pointer-events: none;
+  will-change: opacity;
+}
+.flicker.a { animation: flickerA 2.3s steps(1, end) infinite; }
+.flicker.b { animation: flickerB 3.7s steps(1, end) infinite; }
+@keyframes flickerA {
+  0%   { opacity: 0.05; }
+  18%  { opacity: 0.28; }
+  26%  { opacity: 0.10; }
+  48%  { opacity: 0.34; }
+  60%  { opacity: 0.12; }
+  82%  { opacity: 0.30; }
+  100% { opacity: 0.06; }
+}
+@keyframes flickerB {
+  0%   { opacity: 0.10; }
+  30%  { opacity: 0.22; }
+  44%  { opacity: 0.07; }
+  70%  { opacity: 0.26; }
+  88%  { opacity: 0.09; }
+  100% { opacity: 0.14; }
+}
+
+/* Particle canvas — dots travelling along neural lines */
+.particles {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+/* Glow overlays positioned over key features */
+.glow {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 4;
+  will-change: opacity, transform;
+}
+
+/* Eyes */
+.eye {
+  width: 8%;
+  height: 6%;
+  background: radial-gradient(circle at 50% 50%,
+    rgba(255,255,255,0.95) 0%,
+    rgba(190,225,255,0.7) 22%,
+    rgba(120,180,255,0.3) 48%,
+    transparent 70%);
+  filter: blur(1px);
+}
+.eye.left  { left: 37.0%; top: 49.0%; animation: eyePulse 3.1s ease-in-out infinite; }
+.eye.right { left: 62.6%; top: 48.7%; animation: eyePulse 3.1s ease-in-out infinite 0.15s; }
+@keyframes eyePulse {
+  0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.85); }
+  50%      { opacity: 1;    transform: translate(-50%, -50%) scale(1.22); }
+}
+
+/* ACE chip aura */
+.ace {
+  left: 50%;
+  top: 34.4%;
+  width: 22%;
+  height: 22%;
+  background: radial-gradient(circle at 50% 50%,
+    rgba(210,235,255,0.55) 0%,
+    rgba(140,190,255,0.28) 30%,
+    rgba(90,150,235,0.12) 52%,
+    transparent 70%);
+  filter: blur(2px);
+  animation: acePulse 3.6s ease-in-out infinite;
+}
+@keyframes acePulse {
+  0%, 100% { opacity: 0.4;  transform: translate(-50%, -50%) scale(0.82); }
+  50%      { opacity: 0.95; transform: translate(-50%, -50%) scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .face, .flicker, .eye, .ace, .aura { animation: none; }
+  .flicker { opacity: 0.18; }
+}
