@@ -113,6 +113,17 @@ A head needs a **skeletal/facial rig** to truly animate (jaw, blinks, visemes).
   models**. So it can't rig the ACE head. (It's an option only if you want a *full body*.)
 - **Blender is the path** — rig the head's mesh with an armature + shape keys, or use
   your existing `ACE_MASTER.glb.blend` rig, then export an animated GLB (source A).
+  - **Fastest:** run `ace-app/scripts/blender_rig_ace.py` in Blender 4.x — it
+    auto-rigs the head (single Head deform bone, automatic weights) and bakes the
+    four clips the loader expects, then exports an animated GLB:
+    ```bash
+    blender --background --python ace-app/scripts/blender_rig_ace.py -- \
+        --in ace-app/app/assets/ace-3d/ace.glb \
+        --out ace-app/app/assets/ace-3d/ace_rigged.glb
+    ```
+    Drop the result into `design_handoff_ace_avatar/public/models/` and the R3F
+    loader plays `ACE_Idle / ACE_Listening / ACE_Thinking / ACE_Speaking`. Add a
+    jaw/viseme pass later for real lip-sync.
 - **Right now** the `viewer3d` shows the head animated **procedurally** (breathing,
   sway, glow pulse, speaking particle stream) — no bones, but a live talking head.
 
@@ -128,7 +139,13 @@ directly instead of you doing it by hand:
   MCP tools. Useful for generation; same head-only rigging limit applies.
 
 These run on **your** machine and connect to your Claude client — they can't be
-enabled from inside this cloud session. Set them up and I can use them next turn.
+enabled from inside this cloud session. MCP servers attach per-client: enabling the
+Blender MCP in your *desktop* Claude does **not** expose it to this cloud session
+(they're separate), and a cloud server can't reach your local Blender regardless. So:
+- to drive Blender live, run it from the **desktop** Claude session where the MCP is
+  connected, or
+- run `scripts/blender_rig_ace.py` yourself (no MCP needed) and bring the rigged GLB
+  back here for optimizing + wiring.
 
 ## Which to use
 
