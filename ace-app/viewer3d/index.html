@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>ACE · 3D</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html,body { height:100%; background:#000; overflow:hidden;
+                font-family: ui-monospace,"SF Mono",Menlo,monospace; color:#bcd4ff; }
+    #app { position:fixed; inset:0; }
+    canvas { display:block; }
+
+    /* HUD overlay — design language from the reference spec sheet */
+    .hud { position:fixed; inset:0; pointer-events:none; }
+    .corner { position:absolute; font-size:11px; letter-spacing:1px; color:#7fa8e0; opacity:.85; }
+    .tl { top:18px; left:18px; } .tr { top:18px; right:18px; text-align:right; }
+    .bl { bottom:18px; left:18px; } .br { bottom:18px; right:18px; text-align:right; }
+    .hud h1 { font-size:13px; letter-spacing:4px; color:#dbe9ff; margin-bottom:6px; }
+    .spec { display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:10px; }
+    .spec b { color:#9bb8e6; font-weight:400; } .spec span { color:#cfe2ff; text-align:right; }
+    .mode { position:absolute; top:50%; left:18px; transform:translateY(-50%); display:flex; flex-direction:column; gap:6px; }
+    .tag { font-size:10px; letter-spacing:2px; color:#4a6286; }
+    .tag.active { color:#8fd0ff; text-shadow:0 0 8px #3a86ff; }
+
+    .controls { position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
+                display:flex; gap:10px; pointer-events:auto; }
+    .btn { padding:9px 16px; border-radius:20px; border:1px solid #2a4a7f; background:#0a1424cc;
+           color:#cfe2ff; font:inherit; font-size:13px; cursor:pointer; }
+    .btn:hover { border-color:#3f6fd8; }
+    .btn.on { background:#173a6e; border-color:#3f6fd8; }
+    .loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+               font-size:13px; letter-spacing:2px; color:#5b7aa8; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div class="hud">
+    <div class="corner tl">
+      <h1>ACE</h1>
+      <div class="tag" id="viewlabel">FRONT VIEW</div>
+    </div>
+    <div class="corner tr">
+      <div class="spec">
+        <b>TOTAL NODES</b><span>128,000+</span>
+        <b>CONNECTIONS</b><span>2.4M+</span>
+        <b>PROCESSING</b><span>MULTI-CORE</span>
+        <b>MEMORY</b><span>&#8734;</span>
+        <b>LATENCY</b><span>0.002 SEC</span>
+        <b>UPTIME</b><span>100%</span>
+      </div>
+    </div>
+    <div class="corner bl mode">
+      <div class="tag" data-mode="idle">IDLE</div>
+      <div class="tag" data-mode="listening">LISTENING</div>
+      <div class="tag" data-mode="thinking">THINKING</div>
+      <div class="tag" data-mode="speaking">RESPONSE OUTPUT</div>
+    </div>
+    <div class="corner br"><div class="tag" id="status">NEURAL CORE ONLINE</div></div>
+  </div>
+  <div class="controls">
+    <button class="btn" data-set="idle">Idle</button>
+    <button class="btn" data-set="listening">Listening</button>
+    <button class="btn" data-set="thinking">Thinking</button>
+    <button class="btn" data-set="speaking">Speaking</button>
+    <button class="btn" id="hudToggle">HUD</button>
+  </div>
+  <div class="loading" id="loading">LOADING NEURAL MESH…</div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# runtime binaries are copied in by `npm run prep` (predev/prebuild) — not committed
+public/models/*.glb
+public/draco/
