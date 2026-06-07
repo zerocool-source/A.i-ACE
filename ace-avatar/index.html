@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JARVIS · Neural Avatar</title>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #root { height: 100%; width: 100%; background: #000; overflow: hidden; }
+    body { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    #root { display: flex; align-items: center; justify-content: center; }
+
+    /* ---- Stage ---- */
+    .stage {
+      position: relative;
+      width: min(92vmin, 980px);
+      aspect-ratio: 1 / 1;
+      background: #000;
+      isolation: isolate;
+      cursor: pointer;
+      --level: 0;          /* live audio reactivity 0..1 */
+      --speed: 1;          /* per-mode animation speed multiplier */
+    }
+
+    /* Parallax wrapper — a full-stage transparent plane we translate in JS.
+       Each visual lives inside one so keyframe transforms never collide. */
+    .plx { position: absolute; inset: 0; pointer-events: none; will-change: transform; }
+
+    /* Ambient aura behind the head */
+    .aura {
+      position: absolute; left: 50%; top: 44%;
+      width: 78%; height: 92%;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(ellipse 50% 50% at 50% 50%,
+        rgba(120,170,235,0.30) 0%, rgba(90,140,220,0.14) 38%,
+        rgba(60,100,180,0.05) 60%, transparent 72%);
+      filter: blur(6px);
+      animation: aura calc(9s / var(--speed)) ease-in-out infinite;
+    }
+    @keyframes aura {
+      0%,100% { opacity: .45; transform: translate(-50%,-50%) scale(1); }
+      50%     { opacity: .85; transform: translate(-50%,-50%) scale(1.05); }
+    }
+
+    /* Base avatar image — breathes */
+    .face {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain;
+      animation: breathe calc(7.5s / var(--speed)) ease-in-out infinite;
+      will-change: filter, transform;
+    }
+    @keyframes breathe {
+      0%,100% { transform: scale(1);     filter: brightness(.9) contrast(1.02) drop-shadow(0 0 16px rgba(150,200,255,.20)); }
+      50%     { transform: scale(1.012); filter: brightness(1.14) contrast(1.05) drop-shadow(0 0 42px rgba(170,210,255,.5)); }
+    }
+
+    /* Screen-blended flicker copies — twinkle the nodes */
+    .flicker {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; mix-blend-mode: screen; will-change: opacity;
+    }
+    .flicker.a { animation: flickerA calc(2.3s / var(--speed)) steps(1,end) infinite; }
+    .flicker.b { animation: flickerB calc(3.7s / var(--speed)) steps(1,end) infinite; }
+    @keyframes flickerA { 0%{opacity:.05}18%{opacity:.28}26%{opacity:.10}48%{opacity:.34}60%{opacity:.12}82%{opacity:.30}100%{opacity:.06} }
+    @keyframes flickerB { 0%{opacity:.10}30%{opacity:.22}44%{opacity:.07}70%{opacity:.26}88%{opacity:.09}100%{opacity:.14} }
+
+    /* Particle canvas — neural-line travellers */
+    .particles { position: absolute; inset: 0; width: 100%; height: 100%; mix-blend-mode: screen; }
+
+    /* Reactive bloom — opacity tracks live audio level. No keyframes → no conflict. */
+    .bloom {
+      position: absolute; left: 50%; top: 44%;
+      width: 96%; height: 104%;
+      transform: translate(-50%,-50%) scale(calc(.9 + var(--level) * .14));
+      background: radial-gradient(ellipse 46% 52% at 50% 47%,
+        rgba(190,224,255,0.42) 0%, rgba(120,180,255,0.18) 40%,
+        rgba(80,140,235,0.06) 62%, transparent 74%);
+      filter: blur(8px);
+      opacity: calc(var(--level) * 0.9);
+      mix-blend-mode: screen;
+    }
+
+    /* Glow blobs */
+    .glow { position: absolute; transform: translate(-50%,-50%); border-radius: 50%; }
+    .eye {
+      width: 8%; height: 6%;
+      background: radial-gradient(circle at 50% 50%,
+        rgba(255,255,255,.95) 0%, rgba(190,225,255,.7) 22%, rgba(120,180,255,.3) 48%, transparent 70%);
+      filter: blur(1px);
+    }
+    .eye.left  { left: 37.0%; top: 49.0%; animation: eyePulse calc(3.1s / var(--speed)) ease-in-out infinite; }
+    .eye.right { left: 62.6%; top: 48.7%; animation: eyePulse calc(3.1s / var(--speed)) ease-in-out infinite .15s; }
+    @keyframes eyePulse {
+      0%,100% { opacity: calc(.55 + var(--level)*.4); transform: translate(-50%,-50%) scale(calc(.85 + var(--level)*.25)); }
+      50%     { opacity: 1; transform: translate(-50%,-50%) scale(1.22); }
+    }
+
+    .ace {
+      left: 50%; top: 34.4%; width: 22%; height: 22%;
+      background: radial-gradient(circle at 50% 50%,
+        rgba(210,235,255,.55) 0%, rgba(140,190,255,.28) 30%, rgba(90,150,235,.12) 52%, transparent 70%);
+      filter: blur(2px);
+      animation: acePulse calc(3.6s / var(--speed)) ease-in-out infinite;
+    }
+    @keyframes acePulse {
+      0%,100% { opacity: calc(.4 + var(--level)*.5); transform: translate(-50%,-50%) scale(.82); }
+      50%     { opacity: .95; transform: translate(-50%,-50%) scale(calc(1.08 + var(--level)*.12)); }
+    }
+
+    /* Per-mode accent: subtle hue shift on synthetic emissive layers only (never the face) */
+    .stage[data-mode="listening"] .aura,
+    .stage[data-mode="listening"] .bloom { filter: blur(7px) hue-rotate(-16deg) saturate(1.15); }
+    .stage[data-mode="thinking"]  .aura,
+    .stage[data-mode="thinking"]  .bloom { filter: blur(8px) hue-rotate(26deg) saturate(1.1); }
+    .stage[data-mode="speaking"]  .bloom { filter: blur(8px) brightness(1.15); }
+
+    /* Idle invitation: a barely-there ring that fades out after first activation. No text. */
+    .invite {
+      position: absolute; left: 50%; top: 46%;
+      width: 64%; height: 76%;
+      transform: translate(-50%,-50%);
+      border-radius: 50%;
+      box-shadow: 0 0 0 1px rgba(150,200,255,.18) inset;
+      animation: invite 3.4s ease-in-out infinite;
+      transition: opacity .8s ease;
+      pointer-events: none;
+    }
+    .stage[data-armed="1"] .invite { opacity: 0; }
+    @keyframes invite {
+      0%,100% { opacity: .0; transform: translate(-50%,-50%) scale(.98); }
+      50%     { opacity: .5; transform: translate(-50%,-50%) scale(1.02); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .face,.flicker,.eye,.ace,.aura,.invite { animation: none; }
+      .flicker { opacity: .18; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useRef, useEffect, useState, useCallback } = React;
+
+    const MODES = { IDLE: "idle", LISTENING: "listening", THINKING: "thinking", SPEAKING: "speaking" };
+
+    const PERSONA =
+      "You are JARVIS, a personal AI assistant running on a local device. " +
+      "Speak with calm, precise confidence and a touch of dry wit. " +
+      "You are concise: answers are 1-3 short sentences suitable to be read aloud. " +
+      "Address the user as 'sir' occasionally but not every line. Never use markdown, lists, or emoji.";
+
+    /* ---------- Neural particle field (mode + level aware) ---------- */
+    function useNeuralParticles(canvasRef, modeRef, levelRef) {
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        let raf, nodes = [], edges = [], travellers = [], W = 0, H = 0, running = true;
+        const HEAD = { cx: .5, cy: .46, rx: .275, ry: .42 };
+        const inHead = (x, y) => {
+          const dx = (x - HEAD.cx) / HEAD.rx, dy = (y - HEAD.cy) / HEAD.ry;
+          return dx * dx + dy * dy <= 1;
+        };
+        const spawn = () => {
+          const e = edges[(Math.random() * edges.length) | 0];
+          return { e, t: Math.random(), speed: .004 + Math.random() * .01, size: .7 + Math.random() * 1.4, life: 0 };
+        };
+        function build() {
+          const rect = canvas.getBoundingClientRect();
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          W = rect.width; H = rect.height;
+          canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          nodes = []; let guard = 0;
+          while (nodes.length < 150 && guard < 6000) {
+            guard++; const x = Math.random(), y = Math.random();
+            if (inHead(x, y)) nodes.push({ x: x * W, y: y * H });
+          }
+          edges = []; const maxD = Math.min(W, H) * .12;
+          for (let i = 0; i < nodes.length; i++) {
+            const cand = [];
+            for (let j = 0; j < nodes.length; j++) {
+              if (i === j) continue;
+              const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+              if (d < maxD) cand.push({ j, d });
+            }
+            cand.sort((a, b) => a.d - b.d);
+            cand.slice(0, 3).forEach((c) => { if (i < c.j) edges.push([i, c.j]); });
+          }
+          if (!edges.length) return;
+          travellers = []; for (let k = 0; k < 46; k++) travellers.push(spawn());
+        }
+        function frame() {
+          if (!running) return;
+          ctx.clearRect(0, 0, W, H);
+          const mode = modeRef.current, lvl = levelRef.current;
+          // speed scales with mode + live level
+          const boost = (mode === MODES.THINKING ? 2.4 : mode === MODES.LISTENING ? 1.5 : mode === MODES.SPEAKING ? 1.3 : 1) + lvl * 1.4;
+          for (let i = 0; i < travellers.length; i++) {
+            const tr = travellers[i];
+            tr.t += tr.speed * boost; tr.life += 1;
+            if (tr.t >= 1) {
+              const arrive = tr.e[1];
+              const next = edges.filter((ed) => ed[0] === arrive || ed[1] === arrive);
+              if (next.length && Math.random() < .85) {
+                const ne = next[(Math.random() * next.length) | 0];
+                tr.e = ne[0] === arrive ? ne : [ne[1], ne[0]]; tr.t = 0;
+              } else { travellers[i] = spawn(); continue; }
+            }
+            const a = nodes[tr.e[0]], b = nodes[tr.e[1]];
+            if (!a || !b) { travellers[i] = spawn(); continue; }
+            const x = a.x + (b.x - a.x) * tr.t, y = a.y + (b.y - a.y) * tr.t;
+            const alpha = Math.sin(tr.t * Math.PI) * (.65 + .35 * Math.sin(tr.life * .25 + i));
+            ctx.beginPath();
+            ctx.fillStyle = "rgba(220,238,255," + (alpha * (.9 + lvl * .1)).toFixed(3) + ")";
+            ctx.shadowColor = "rgba(170,210,255,0.9)"; ctx.shadowBlur = 6;
+            ctx.arc(x, y, tr.size, 0, Math.PI * 2); ctx.fill();
+          }
+          raf = requestAnimationFrame(frame);
+        }
+        build(); frame();
+        const onResize = () => build();
+        window.addEventListener("resize", onResize);
+        return () => { running = false; cancelAnimationFrame(raf); window.removeEventListener("resize", onResize); };
+      }, [canvasRef, modeRef, levelRef]);
+    }
+
+    /* ---------- Parallax + head-sway + live --level writer ---------- */
+    function useAlive(stageRef, modeRef, levelRef) {
+      useEffect(() => {
+        const stage = stageRef.current;
+        if (!stage) return;
+        const layers = [...stage.querySelectorAll(".plx")].map((el) => ({ el, d: parseFloat(el.dataset.depth) || 8 }));
+        let raf, running = true;
+        let px = 0, py = 0, tx = 0, ty = 0;     // smoothed pointer
+        let dispLevel = 0;
+        const onMove = (e) => {
+          const r = stage.getBoundingClientRect();
+          tx = ((e.clientX - r.left) / r.width - .5);
+          ty = ((e.clientY - r.top) / r.height - .5);
+        };
+        const onLeave = () => { tx = 0; ty = 0; };
+        stage.addEventListener("pointermove", onMove);
+        stage.addEventListener("pointerleave", onLeave);
+        function loop(t) {
+          if (!running) return;
+          const mode = modeRef.current;
+          const intensity = mode === MODES.THINKING ? 1.5 : mode === MODES.LISTENING ? 1.25 : mode === MODES.SPEAKING ? 1.15 : 1;
+          // ease pointer
+          px += (tx - px) * .06; py += (ty - py) * .06;
+          // autonomous idle sway (figure-eight) so it feels alive with no input
+          const sx = Math.sin(t * 0.00035) * 0.5 + Math.sin(t * 0.0011) * 0.18;
+          const sy = Math.sin(t * 0.00052) * 0.4;
+          const ax = (px * 2 + sx) * intensity;
+          const ay = (py * 2 + sy) * intensity;
+          for (const { el, d } of layers) el.style.transform = "translate3d(" + (ax * d) + "px," + (ay * d) + "px,0)";
+          // subtle whole-head rotate for depth
+          stage.style.transform = "perspective(1400px) rotateY(" + (ax * 1.1) + "deg) rotateX(" + (-ay * 1.1) + "deg)";
+          // smooth + publish audio level
+          dispLevel += (levelRef.current - dispLevel) * .2;
+          stage.style.setProperty("--level", dispLevel.toFixed(3));
+          raf = requestAnimationFrame(loop);
+        }
+        raf = requestAnimationFrame(loop);
+        return () => { running = false; cancelAnimationFrame(raf); stage.removeEventListener("pointermove", onMove); stage.removeEventListener("pointerleave", onLeave); };
+      }, [stageRef, modeRef, levelRef]);
+    }
+
+    /* ---------- The JARVIS brain: listen → think → speak ---------- */
+    function useJarvis({ modeRef, levelRef, setMode }) {
+      const histRef = useRef([]);              // {role, content}
+      const recRef = useRef(null);
+      const micRef = useRef(null);             // { ctx, analyser, raf, stream }
+      const voiceRef = useRef(null);
+
+      // pick a fitting voice once available
+      useEffect(() => {
+        const pick = () => {
+          const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+          if (!vs.length) return;
+          voiceRef.current =
+            vs.find((v) => /en-GB/i.test(v.lang) && /male|daniel|arthur|george/i.test(v.name)) ||
+            vs.find((v) => /en-GB/i.test(v.lang)) ||
+            vs.find((v) => /en[-_]/i.test(v.lang)) || vs[0];
+        };
+        pick();
+        if (window.speechSynthesis) speechSynthesis.onvoiceschanged = pick;
+      }, []);
+
+      const setModeBoth = useCallback((m) => { modeRef.current = m; setMode(m); }, [modeRef, setMode]);
+
+      const stopMic = useCallback(() => {
+        const m = micRef.current; if (!m) return;
+        cancelAnimationFrame(m.raf);
+        if (m.stream) m.stream.getTracks().forEach((t) => t.stop());
+        if (m.ctx && m.ctx.state !== "closed") m.ctx.close();
+        micRef.current = null;
+      }, []);
+
+      // live mic amplitude → levelRef while listening
+      const startMic = useCallback(async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const src = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser(); analyser.fftSize = 512;
+          src.connect(analyser);
+          const buf = new Uint8Array(analyser.frequencyBinCount);
+          const tick = () => {
+            analyser.getByteTimeDomainData(buf);
+            let sum = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+            const rms = Math.sqrt(sum / buf.length);
+            levelRef.current = Math.min(1, rms * 3.2);
+            micRef.current.raf = requestAnimationFrame(tick);
+          };
+          micRef.current = { ctx, analyser, stream, raf: 0 };
+          tick();
+        } catch (e) { /* mic blocked — level stays driven by fallback */ }
+      }, [levelRef]);
+
+      const brain = useCallback(async (userText) => {
+        histRef.current.push({ role: "user", content: userText });
+        let reply = "";
+        try {
+          if (window.claude && window.claude.complete) {
+            reply = await window.claude.complete({
+              messages: [
+                { role: "user", content: PERSONA },
+                { role: "assistant", content: "Understood. JARVIS online." },
+                ...histRef.current,
+              ],
+            });
+          }
+        } catch (e) { reply = ""; }
+        if (!reply) reply = "I'm having trouble reaching my reasoning core, sir. The local model may be offline.";
+        reply = reply.trim();
+        histRef.current.push({ role: "assistant", content: reply });
+        if (histRef.current.length > 16) histRef.current = histRef.current.slice(-16);
+        return reply;
+      }, []);
+
+      const speak = useCallback((text) => {
+        const done = () => setModeBoth(MODES.IDLE);
+        if (!window.speechSynthesis) { done(); return; }
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        if (voiceRef.current) u.voice = voiceRef.current;
+        u.rate = 1.02; u.pitch = 0.92;
+        // glow pulses on each word; decays between
+        let decay;
+        u.onstart = () => {
+          setModeBoth(MODES.SPEAKING);
+          const fall = () => { levelRef.current *= 0.9; decay = requestAnimationFrame(fall); };
+          fall();
+        };
+        u.onboundary = () => { levelRef.current = Math.min(1, 0.55 + Math.random() * 0.45); };
+        u.onend = () => { cancelAnimationFrame(decay); levelRef.current = 0; done(); };
+        u.onerror = () => { cancelAnimationFrame(decay); levelRef.current = 0; done(); };
+        speechSynthesis.speak(u);
+      }, [levelRef, setModeBoth]);
+
+      const think = useCallback(async (text) => {
+        setModeBoth(MODES.THINKING);
+        // thinking shimmer on the level channel
+        let t0 = performance.now(), shimmer = true;
+        const sh = () => { if (!shimmer) return; levelRef.current = 0.28 + 0.18 * Math.abs(Math.sin((performance.now() - t0) / 240)); requestAnimationFrame(sh); };
+        sh();
+        const reply = await brain(text);
+        shimmer = false; levelRef.current = 0;
+        speak(reply);
+      }, [brain, speak, setModeBoth, levelRef]);
+
+      const fallbackPrompt = useCallback(() => {
+        const text = window.prompt("Speak to JARVIS (microphone unavailable in this view):");
+        if (text && text.trim()) think(text.trim()); else setModeBoth(MODES.IDLE);
+      }, [think, setModeBoth]);
+
+      const listen = useCallback(() => {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) { fallbackPrompt(); return; }
+        const rec = new SR();
+        recRef.current = rec;
+        rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1; rec.continuous = false;
+        let got = false;
+        rec.onstart = () => { setModeBoth(MODES.LISTENING); startMic(); };
+        rec.onresult = (e) => { got = true; const text = e.results[0][0].transcript; stopMic(); think(text); };
+        rec.onerror = (e) => { stopMic(); if (e.error === "not-allowed" || e.error === "service-not-allowed") fallbackPrompt(); else setModeBoth(MODES.IDLE); };
+        rec.onend = () => { stopMic(); if (!got && modeRef.current === MODES.LISTENING) setModeBoth(MODES.IDLE); };
+        try { rec.start(); } catch (e) { fallbackPrompt(); }
+      }, [fallbackPrompt, startMic, stopMic, think, setModeBoth, modeRef]);
+
+      const activate = useCallback(() => {
+        const m = modeRef.current;
+        if (m === MODES.IDLE) { listen(); }
+        else if (m === MODES.LISTENING) { if (recRef.current) recRef.current.stop(); }
+        else if (m === MODES.SPEAKING) { if (window.speechSynthesis) speechSynthesis.cancel(); setModeBoth(MODES.IDLE); }
+        // thinking: ignore taps
+      }, [listen, setModeBoth, modeRef]);
+
+      useEffect(() => () => { stopMic(); if (window.speechSynthesis) speechSynthesis.cancel(); }, [stopMic]);
+
+      return { activate };
+    }
+
+    /* ---------- App ---------- */
+    function Avatar() {
+      const SRC = "public/ace-avatar.png";
+      const [mode, setMode] = useState(MODES.IDLE);
+      const [armed, setArmed] = useState(false);
+      const modeRef = useRef(MODES.IDLE);
+      const levelRef = useRef(0);
+      const stageRef = useRef(null);
+      const canvasRef = useRef(null);
+
+      useNeuralParticles(canvasRef, modeRef, levelRef);
+      useAlive(stageRef, modeRef, levelRef);
+      const jarvis = useJarvis({ modeRef, levelRef, setMode });
+
+      const go = useCallback(() => { setArmed(true); jarvis.activate(); }, [jarvis]);
+
+      useEffect(() => {
+        const onKey = (e) => { if (e.code === "Space") { e.preventDefault(); go(); } };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [go]);
+
+      return (
+        <div className="stage" ref={stageRef} data-mode={mode} data-armed={armed ? "1" : "0"} onClick={go} role="button" aria-label="Talk to JARVIS">
+          <div className="plx" data-depth="6"><div className="aura" /></div>
+          <div className="plx" data-depth="7"><img className="face" src={SRC} alt="JARVIS neural avatar" draggable="false" /></div>
+          <div className="plx" data-depth="7"><img className="flicker a" src={SRC} alt="" aria-hidden="true" draggable="false" /></div>
+          <div className="plx" data-depth="7"><img className="flicker b" src={SRC} alt="" aria-hidden="true" draggable="false" /></div>
+          <div className="plx" data-depth="10"><canvas className="particles" ref={canvasRef} /></div>
+          <div className="plx" data-depth="12"><div className="bloom" /></div>
+          <div className="plx" data-depth="14"><div className="glow ace" /></div>
+          <div className="plx" data-depth="18"><div className="glow eye left" /></div>
+          <div className="plx" data-depth="18"><div className="glow eye right" /></div>
+          <div className="plx" data-depth="4"><div className="invite" /></div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<Avatar />);
+  </script>
+</body>
+</html>
