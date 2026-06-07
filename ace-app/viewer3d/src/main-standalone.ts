@@ -21,6 +21,25 @@ const PARAMS: Record<Mode, { spin: number; bloom: number; speaking: boolean }> =
 };
 let mode: Mode = "idle";
 
+// Skeletal animation (the embedded GLB is rigged with 4 clips).
+let mixer: THREE.AnimationMixer | null = null;
+const actions: Record<string, THREE.AnimationAction> = {};
+let current: THREE.AnimationAction | null = null;
+const animClock = new THREE.Clock();
+const CLIP_KEYWORD: Record<Mode, string> = {
+  idle: "idle", listening: "listen", thinking: "think", speaking: "speak",
+};
+function playClip(m: Mode) {
+  if (!mixer) return;
+  const names = Object.keys(actions);
+  const name = names.find((n) => n.toLowerCase().includes(CLIP_KEYWORD[m])) ?? names[0];
+  const next = name ? actions[name] : null;
+  if (!next || next === current) return;
+  next.reset().fadeIn(0.4).play();
+  if (current) current.fadeOut(0.4);
+  current = next;
+}
+
 const app = document.getElementById("app")!;
 const loadingEl = document.getElementById("loading")!;
 
@@ -91,6 +110,11 @@ new GLTFLoader().parse(
       }
     });
     root.add(obj);
+    if (g.animations && g.animations.length) {
+      mixer = new THREE.AnimationMixer(obj);
+      for (const clip of g.animations) actions[clip.name] = mixer.clipAction(clip);
+      playClip(mode);
+    }
     modelReady = true;
     loadingEl.style.display = "none";
   },
@@ -141,6 +165,7 @@ function setMode(next: Mode) {
   document.getElementById("status")!.textContent =
     mode === "speaking" ? "RESPONSE OUTPUT" : mode === "thinking" ? "PROCESSING…" :
     mode === "listening" ? "LISTENING" : "NEURAL CORE ONLINE";
+  playClip(mode);
 }
 document.querySelectorAll<HTMLElement>(".controls .btn[data-set]").forEach((b) =>
   b.addEventListener("click", () => setMode(b.dataset.set as Mode)));
@@ -160,7 +185,9 @@ function animate() {
   controls.autoRotateSpeed = p.spin * 10;
   const pulse = (mode === "thinking" || mode === "speaking") ? 0.18 * Math.sin(t * 6) : 0;
   bloom.strength += (p.bloom + pulse - bloom.strength) * 0.08;
-  if (modelReady) {
+  if (mixer) {
+    mixer.update(animClock.getDelta());
+  } else if (modelReady) {
     root.scale.setScalar(1 + Math.sin(t * 1.1) * 0.012);
     root.position.y = Math.sin(t * 0.6) * 0.03;
   }
