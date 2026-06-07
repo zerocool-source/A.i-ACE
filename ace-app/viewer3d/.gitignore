@@ -1,5 +1,8 @@
 node_modules/
 dist/
+dist-standalone/
 # runtime binaries are copied in by `npm run prep` (predev/prebuild) — not committed
 public/models/*.glb
 public/draco/
+# large generated base64 module for the standalone build (regenerate via `npm run embed`)
+src/embeddedGlb.ts

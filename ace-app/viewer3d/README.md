@@ -26,6 +26,25 @@ overlay. Speaking emits the mouth particle stream.
 
 ---
 
+## Open it with no server (`ace-3d.html`)
+
+`ace-3d.html` (committed) is a **single self-contained file** — Three.js inlined and
+the GLB embedded (decoder-free), so you just **double-click it**; no install, no
+server, no `localhost`. (The cloud dev container can't expose a reachable localhost,
+so this file is the "just let me see it" path.)
+
+Rebuild it:
+```bash
+# 1) make a decoder-free GLB (no Draco — file:// can't fetch a decoder)
+npx @gltf-transform/cli simplify ../app/assets/ace-3d/ace.glb /tmp/s.glb --ratio 0.1 --error 0.01
+npx @gltf-transform/cli optimize /tmp/s.glb /tmp/ace.web.glb \
+    --compress quantize --texture-compress webp --texture-size 1024 --simplify false
+# 2) embed + build the single file
+npm run embed -- /tmp/ace.web.glb
+npm run build:standalone        # → dist-standalone/standalone.html
+cp dist-standalone/standalone.html ace-3d.html
+```
+
 ## Design references
 
 These three reference frames define ACE's look; the viewer implements their cues.

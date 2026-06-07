@@ -104,6 +104,32 @@ loader uses these today. See the root `README.md` for the validation report.
 
 ---
 
+## Rigging the head — what works
+
+A head needs a **skeletal/facial rig** to truly animate (jaw, blinks, visemes).
+
+- **Meshy auto-rig does NOT work here.** Meshy's rigging API (`POST /openapi/v1/rigging`)
+  only rigs **textured full humanoid/biped** models and **explicitly rejects head-only
+  models**. So it can't rig the ACE head. (It's an option only if you want a *full body*.)
+- **Blender is the path** — rig the head's mesh with an armature + shape keys, or use
+  your existing `ACE_MASTER.glb.blend` rig, then export an animated GLB (source A).
+- **Right now** the `viewer3d` shows the head animated **procedurally** (breathing,
+  sway, glow pulse, speaking particle stream) — no bones, but a live talking head.
+
+### Driving Blender / Meshy via MCP (optional, powerful)
+If you enable these MCP servers in your Claude client, an agent can drive the tools
+directly instead of you doing it by hand:
+
+- **Blender MCP** (`blender-mcp`, ahujasid/blender-mcp) — exposes Blender to Claude:
+  create/modify objects, add armatures, run Python in Blender, export GLB. With this
+  connected, the head can be rigged in-session. You install the addon + MCP server;
+  the agent then issues the rig/export steps.
+- **Meshy MCP** — wraps the Meshy API (text/image→3D, and rigging *for humanoids*) as
+  MCP tools. Useful for generation; same head-only rigging limit applies.
+
+These run on **your** machine and connect to your Claude client — they can't be
+enabled from inside this cloud session. Set them up and I can use them next turn.
+
 ## Which to use
 
 | Source | Rig + animation | Effort | Best for |

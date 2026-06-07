@@ -9,6 +9,8 @@
     "prebuild": "node scripts/prep.mjs",
     "dev": "vite",
     "build": "vite build",
+    "embed": "node scripts/embed.mjs",
+    "build:standalone": "vite build --config vite.standalone.config.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@types/three": "^0.171.0",
     "typescript": "^5.6.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }
