@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "ACE",
+    "slug": "ace-app",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "ACE listens to the conversation so it can reason and respond when you ask. Audio is transcribed on the fly and never recorded.",
+        "NSSpeechRecognitionUsageDescription": "ACE transcribes nearby speech so it can follow the conversation. Transcripts are kept briefly in memory and not stored."
+      }
+    },
+    "android": {
+      "permissions": ["RECORD_AUDIO"]
+    },
+    "plugins": ["expo-av"],
+    "newArchEnabled": true
+  }
+}
