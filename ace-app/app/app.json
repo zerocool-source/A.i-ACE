@@ -6,7 +6,9 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#000000",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
@@ -15,9 +17,15 @@
       }
     },
     "android": {
-      "permissions": ["RECORD_AUDIO"]
+      "permissions": [
+        "RECORD_AUDIO"
+      ]
     },
-    "plugins": ["expo-av"],
+    "plugins": [
+      "expo-av",
+      "expo-asset",
+      "expo-font"
+    ],
     "newArchEnabled": true
   }
 }

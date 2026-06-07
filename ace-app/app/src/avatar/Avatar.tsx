@@ -9,7 +9,8 @@
 // Tap the face to talk (typed fallback until device speech is wired).
 
 import { useEffect } from "react";
-import { Image, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
+import Svg, { Circle, Defs, RadialGradient, Stop } from "react-native-svg";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   useAnimatedStyle,
@@ -117,10 +118,27 @@ export function Avatar({ mode, level, onTap }: Props) {
               style={[styles.face, faceStyle]}
               resizeMode="contain"
             />
-            {/* eye/chip glow blobs (positions are % of stage, tuned to the image) */}
-            <Animated.View style={[styles.glow, styles.eyeLeft, eyeStyle]} pointerEvents="none" />
-            <Animated.View style={[styles.glow, styles.eyeRight, eyeStyle]} pointerEvents="none" />
-            <Animated.View style={[styles.glow, styles.chip, eyeStyle]} pointerEvents="none" />
+            {/* eye/chip soft glows — SVG radial gradients (positions are % of
+                stage, tuned to the image). Opacity pulses with the breath/mode. */}
+            <Animated.View style={[StyleSheet.absoluteFill, eyeStyle]} pointerEvents="none">
+              <Svg width={SIZE} height={SIZE}>
+                <Defs>
+                  <RadialGradient id="eye" cx="50%" cy="50%" r="50%">
+                    <Stop offset="0%" stopColor="#ffffff" stopOpacity={0.95} />
+                    <Stop offset="35%" stopColor="#bee1ff" stopOpacity={0.55} />
+                    <Stop offset="100%" stopColor="#78b4ff" stopOpacity={0} />
+                  </RadialGradient>
+                  <RadialGradient id="chip" cx="50%" cy="50%" r="50%">
+                    <Stop offset="0%" stopColor="#d2ebff" stopOpacity={0.6} />
+                    <Stop offset="45%" stopColor="#8cbeff" stopOpacity={0.25} />
+                    <Stop offset="100%" stopColor="#5a96eb" stopOpacity={0} />
+                  </RadialGradient>
+                </Defs>
+                <Circle cx={SIZE * 0.37} cy={SIZE * 0.49} r={SIZE * 0.07} fill="url(#eye)" />
+                <Circle cx={SIZE * 0.626} cy={SIZE * 0.487} r={SIZE * 0.07} fill="url(#eye)" />
+                <Circle cx={SIZE * 0.5} cy={SIZE * 0.344} r={SIZE * 0.14} fill="url(#chip)" />
+              </Svg>
+            </Animated.View>
           </View>
         </Pressable>
       </Animated.View>
@@ -140,12 +158,4 @@ const styles = StyleSheet.create({
     backgroundColor: "#3f6fd8",
     opacity: 0.3,
   },
-  glow: {
-    position: "absolute",
-    backgroundColor: "#c7e2ff",
-    borderRadius: 999,
-  },
-  eyeLeft: { left: SIZE * 0.34, top: SIZE * 0.47, width: SIZE * 0.1, height: SIZE * 0.07 },
-  eyeRight: { left: SIZE * 0.58, top: SIZE * 0.47, width: SIZE * 0.1, height: SIZE * 0.07 },
-  chip: { left: SIZE * 0.4, top: SIZE * 0.29, width: SIZE * 0.2, height: SIZE * 0.2, backgroundColor: "#9cc4ff" },
 });
