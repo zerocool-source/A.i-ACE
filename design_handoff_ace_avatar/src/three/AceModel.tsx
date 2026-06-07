@@ -1,26 +1,36 @@
 import { useEffect, useRef } from "react";
 import { useGLTF, useAnimations } from "@react-three/drei";
 import * as THREE from "three";
-import { ACE_ANIMATED_URL, DRACO_DECODER_PATH, type AceState } from "./aceConfig";
+import {
+  DRACO_DECODER_PATH,
+  aceAnimatedUrl,
+  pickTier,
+  type AceState,
+  type Tier,
+} from "./aceConfig";
 
 type AceModelProps = {
   /** Which baked clip to play. Defaults to ACE_Idle. */
   state?: AceState;
   /** Crossfade duration between clips, in seconds. */
   fade?: number;
+  /** Quality tier. Defaults to a device-hint heuristic (see pickTier). */
+  tier?: Tier;
 };
 
 /**
- * Loads ACE_ANIMATED_PRODUCTION.glb (Draco-compressed, skinned, 4 clips) and
- * crossfades between behavioural states. Geometry, materials and transparency
- * are used exactly as authored — this loader does not alter ACE's look.
+ * Loads the tier-appropriate ACE animated GLB (Draco-compressed, skinned, 4
+ * clips) and crossfades between behavioural states. Geometry, materials and
+ * transparency are used exactly as authored — this loader does not alter ACE's
+ * look; the mobile tier is the same model at a lower triangle budget.
  *
  * The second argument to useGLTF points DRACOLoader at the self-hosted decoder
  * in /public/draco, so loading works offline (Electron / packaged / mobile).
  */
-export function AceModel({ state = "ACE_Idle", fade = 0.4 }: AceModelProps) {
+export function AceModel({ state = "ACE_Idle", fade = 0.4, tier }: AceModelProps) {
   const group = useRef<THREE.Group>(null);
-  const { scene, animations } = useGLTF(ACE_ANIMATED_URL, DRACO_DECODER_PATH);
+  const url = aceAnimatedUrl(tier ?? pickTier());
+  const { scene, animations } = useGLTF(url, DRACO_DECODER_PATH);
   const { actions, mixer } = useAnimations(animations, group);
 
   // Crossfade to the requested clip whenever `state` changes.
@@ -56,5 +66,5 @@ export function AceModel({ state = "ACE_Idle", fade = 0.4 }: AceModelProps) {
   );
 }
 
-// Warm the cache + decoder so first interaction is instant.
-useGLTF.preload(ACE_ANIMATED_URL, DRACO_DECODER_PATH);
+// Warm the cache + decoder for the detected tier so first interaction is instant.
+useGLTF.preload(aceAnimatedUrl(pickTier()), DRACO_DECODER_PATH);

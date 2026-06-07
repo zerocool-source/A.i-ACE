@@ -4,9 +4,10 @@
 **Validator:** Khronos `gltf-validator` 2.0.0-dev.3.10 (glTF 2.0 / GLB)
 **Pipeline:** `scripts/optimize-ace.mjs` (@gltf-transform + meshoptimizer + draco3dgltf)
 
-This report covers the two production assets produced from the source exports.
-Raw machine-readable validator output is archived alongside this file:
-`ACE_EXPORT_PRODUCTION.validator.json`, `ACE_ANIMATED_PRODUCTION.validator.json`.
+This report covers the production assets produced from the source exports: a
+high-detail tier (desktop/Electron) and a mobile LOD tier. Raw machine-readable
+validator output and reference renders are archived alongside this file
+(`*.validator.json`, `previews/*.png`).
 
 ---
 
@@ -36,6 +37,39 @@ Raw machine-readable validator output is archived alongside this file:
 | ACE_ANIMATED size | 917,392 B | 675,332 B | **−26.4%** |
 | ACE_ANIMATED triangles | 255,371 | 144,021 | **−43.6% (under 150k target)** |
 | ACE_ANIMATED warnings | 3 | **0** | resolved |
+
+---
+
+## 1b. Mobile / low-tier LOD (added)
+
+Aggressively-decimated variants for low-end mobile, produced by
+`scripts/make-mobile-lod.mjs` through the same cleanup pipeline. Borders stay
+locked so the connection tubes never develop holes; HeadMat translucency, all 4
+clips and the skin are preserved. Renders confirm ACE's identity is intact
+(`reports/previews/*_MOBILE.png`).
+
+| Metric | ACE_EXPORT_MOBILE.glb | ACE_ANIMATED_MOBILE.glb |
+|---|---|---|
+| **File size** | 504.5 KB | 522.6 KB |
+| **Errors / Warnings** | **0 / 0** | **0 / 0** |
+| Triangles | **84,079** (−55% vs high) | **90,245** (−37% vs high) |
+| Animations | 0 | **4** (preserved) |
+| Skins / joints | 0 | 1 / 6 |
+| Compression | Draco | Draco |
+
+The simplifier floors out near ~84–90k because the neural-connection tubes have
+locked open borders (collapsing them would punch holes). This is the practical
+low-end target without visual damage.
+
+### Asset tiers — which to ship
+
+| Tier | Static | Animated | Use |
+|---|---|---|---|
+| **High** | ACE_EXPORT_PRODUCTION (186k) | ACE_ANIMATED_PRODUCTION (144k) | Desktop / Electron |
+| **Mobile** | ACE_EXPORT_MOBILE (84k) | ACE_ANIMATED_MOBILE (90k) | Phones / low-end WebGL |
+
+The R3F scaffold auto-selects a tier via `pickTier()` (device-memory / core /
+coarse-pointer hints), override-able with `?tier=high|mobile`.
 
 ---
 
@@ -108,9 +142,13 @@ clean production state for a Draco asset.
 
 ```
 assets/source/        ACE_EXPORT.glb, ACE_ANIMATED.glb        (originals, provenance)
-assets/production/     ACE_EXPORT_PRODUCTION.glb               (cleaned, hero quality)
-                       ACE_ANIMATED_PRODUCTION.glb             (cleaned + decimated + repaired)
+assets/production/     ACE_EXPORT_PRODUCTION.glb               (high: cleaned hero quality)
+                       ACE_ANIMATED_PRODUCTION.glb             (high: cleaned + decimated + repaired)
+                       ACE_EXPORT_MOBILE.glb                   (mobile LOD)
+                       ACE_ANIMATED_MOBILE.glb                 (mobile LOD)
 reports/               this report + per-file validator JSON
-scripts/optimize-ace.mjs   reproducible pipeline
-design_handoff_ace_avatar/ R3F loader scaffold (public/models, public/draco)
+reports/previews/      reference renders of all four assets
+scripts/optimize-ace.mjs     high-tier pipeline (reproducible)
+scripts/make-mobile-lod.mjs  mobile-tier pipeline (reproducible)
+design_handoff_ace_avatar/   R3F loader scaffold (public/models, public/draco)
 ```

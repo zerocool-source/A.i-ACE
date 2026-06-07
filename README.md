@@ -20,10 +20,14 @@ design_handoff_ace_avatar/                           — React/Vite app + R3F lo
 
 ## Production assets at a glance
 
-| File | Size | Triangles | Clips | Validator |
-|---|---|---|---|---|
-| ACE_EXPORT_PRODUCTION.glb | 754.6 KB | 186,551 | — | 0 errors / 0 warnings |
-| ACE_ANIMATED_PRODUCTION.glb | 659.5 KB | 144,021 | 4 | 0 errors / 0 warnings |
+| File | Tier | Size | Triangles | Clips | Validator |
+|---|---|---|---|---|---|
+| ACE_EXPORT_PRODUCTION.glb | high | 754.6 KB | 186,551 | — | 0 errors / 0 warnings |
+| ACE_ANIMATED_PRODUCTION.glb | high | 659.5 KB | 144,021 | 4 | 0 errors / 0 warnings |
+| ACE_EXPORT_MOBILE.glb | mobile | 504.5 KB | 84,079 | — | 0 errors / 0 warnings |
+| ACE_ANIMATED_MOBILE.glb | mobile | 522.6 KB | 90,245 | 4 | 0 errors / 0 warnings |
+
+The R3F app auto-picks a tier per device (`pickTier()`), override with `?tier=high|mobile`.
 
 Both are Draco-compressed (`KHR_draco_mesh_compression`), use
 `KHR_materials_emissive_strength`, and carry no textures. The remaining validator
@@ -36,7 +40,8 @@ The pipeline is deterministic. From the repo root:
 ```bash
 npm install @gltf-transform/core @gltf-transform/extensions @gltf-transform/functions \
             draco3dgltf meshoptimizer
-node scripts/optimize-ace.mjs        # reads assets/source/*, writes assets/production/*
+node scripts/optimize-ace.mjs        # high tier  -> assets/production/*_PRODUCTION.glb
+node scripts/make-mobile-lod.mjs     # mobile tier -> assets/production/*_MOBILE.glb
 ```
 
 It removes dead UVs/orphans, repairs the skinned-mesh hierarchy, prunes + reorders,

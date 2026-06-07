@@ -164,9 +164,17 @@ model later, point `aceConfig.ts` at a different file in `public/models/`.
 If you ever upgrade `three`, refresh the decoder from
 `node_modules/three/examples/jsm/libs/draco/gltf/` into `public/draco/`.
 
+### Quality tiers
+Two tiers ship per model; `pickTier()` (in `aceConfig.ts`) auto-selects from
+device hints (memory / cores / coarse pointer), and `?tier=high|mobile` forces one.
+- **high** — desktop / Electron (animated ~144k tris).
+- **mobile** — low-end phones (animated ~90k tris, static ~84k).
+
 ### Assets
-- `public/models/ACE_ANIMATED_PRODUCTION.glb` — skinned, 4 clips, ~144k tris.
-- `public/models/ACE_EXPORT_PRODUCTION.glb` — static hero mesh.
+- `public/models/ACE_ANIMATED_PRODUCTION.glb` — high: skinned, 4 clips, ~144k tris.
+- `public/models/ACE_EXPORT_PRODUCTION.glb` — high: static hero mesh, ~186k tris.
+- `public/models/ACE_ANIMATED_MOBILE.glb` — mobile: skinned, 4 clips, ~90k tris.
+- `public/models/ACE_EXPORT_MOBILE.glb` — mobile: static, ~84k tris.
 - `public/draco/` — Draco decoder (`.wasm` + wrappers).
 
 See `../reports/PRODUCTION_VALIDATION_REPORT.md` for the full validation/optimization
