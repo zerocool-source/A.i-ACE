@@ -124,8 +124,13 @@ A head needs a **skeletal/facial rig** to truly animate (jaw, blinks, visemes).
     Drop the result into `design_handoff_ace_avatar/public/models/` and the R3F
     loader plays `ACE_Idle / ACE_Listening / ACE_Thinking / ACE_Speaking`. Add a
     jaw/viseme pass later for real lip-sync.
-- **Right now** the `viewer3d` shows the head animated **procedurally** (breathing,
-  sway, glow pulse, speaking particle stream) — no bones, but a live talking head.
+- **Already done:** `blender_rig_ace.py` was run headless here via the `bpy` module
+  against `ace.glb`, producing **`ace-app/app/assets/ace-3d/ace_rigged.glb`** — a
+  skinned mesh (`JOINTS_0 + WEIGHTS_0`) with the four baked clips. The `viewer3d`
+  now loads the rigged GLB and its mode buttons play the **real** clips
+  (`mixer`-driven), falling back to procedural motion only if no clips are present.
+  Re-run the script to regenerate. (Headless Blender works because Python 3.11 +
+  `pip install bpy` runs Blender as a module — no desktop Blender or MCP needed.)
 
 ### Driving Blender / Meshy via MCP (optional, powerful)
 If you enable these MCP servers in your Claude client, an agent can drive the tools

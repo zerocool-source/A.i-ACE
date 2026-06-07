@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 
-const glbSrc = path.resolve(root, "../app/assets/ace-3d/ace.glb");
+// Prefer the rigged GLB (animated clips) when present, else the static head.
+const riggedSrc = path.resolve(root, "../app/assets/ace-3d/ace_rigged.glb");
+const staticSrc = path.resolve(root, "../app/assets/ace-3d/ace.glb");
 const glbDest = path.resolve(root, "public/models/ace.glb");
 const dracoSrc = path.resolve(root, "node_modules/three/examples/jsm/libs/draco/gltf");
 const dracoDest = path.resolve(root, "public/draco");
@@ -20,11 +22,12 @@ async function exists(p) {
 await mkdir(path.dirname(glbDest), { recursive: true });
 await mkdir(dracoDest, { recursive: true });
 
+const glbSrc = (await exists(riggedSrc)) ? riggedSrc : staticSrc;
 if (await exists(glbSrc)) {
   await cp(glbSrc, glbDest);
-  console.log("✔ ace.glb");
+  console.log(`✔ ${path.basename(glbSrc)}${glbSrc === riggedSrc ? " (rigged, animated)" : ""}`);
 } else {
-  console.warn(`⚠ missing ${path.relative(root, glbSrc)} — generate it first (see 3D-PIPELINE.md)`);
+  console.warn(`⚠ missing model GLB — generate it first (see 3D-PIPELINE.md)`);
 }
 
 if (await exists(dracoSrc)) {

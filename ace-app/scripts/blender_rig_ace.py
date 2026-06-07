@@ -85,12 +85,19 @@ head_bone.head = Vector((cx, cy, z0 + 0.35 * H))
 head_bone.tail = Vector((cx, cy, z0 + 0.95 * H))
 bpy.ops.object.mode_set(mode="OBJECT")
 
-# ---- bind mesh with automatic weights -------------------------------------
+# ---- bind mesh (rigid: whole head → Head bone) ----------------------------
+# Parent "with empty groups" adds an Armature modifier + a 'Head' vertex group,
+# then we assign every vertex to it at full weight. For a single head bone this
+# rigid bind is exactly what we want (the head moves as one) and it sidesteps the
+# bone-heat-weighting solver, which fails on dense photogrammetry-style meshes.
 bpy.ops.object.select_all(action="DESELECT")
 mesh.select_set(True)
 arm.select_set(True)
 bpy.context.view_layer.objects.active = arm
-bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+bpy.ops.object.parent_set(type="ARMATURE_NAME")
+
+vg = mesh.vertex_groups.get("Head") or mesh.vertex_groups.new(name="Head")
+vg.add([v.index for v in mesh.data.vertices], 1.0, "REPLACE")
 
 # ---- animation helpers ----------------------------------------------------
 arm.animation_data_create()
@@ -156,6 +163,7 @@ bpy.ops.export_scene.gltf(
     export_skins=True,
     export_apply=False,
     use_selection=True,
+    export_draco_mesh_compression_enable=True,
 )
 print(f"\n✔ rigged GLB written: {OUT_PATH}")
 print("  clips: ACE_Idle, ACE_Listening, ACE_Thinking, ACE_Speaking")
