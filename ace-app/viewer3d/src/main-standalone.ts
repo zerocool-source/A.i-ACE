@@ -337,6 +337,78 @@ function updateAmbient() {
   ambGeo.attributes.position.needsUpdate = true;
 }
 
+// --- ambient knowledge network around the avatar (reference style) ----------
+// deep-blue gradient backdrop
+function bgGradient(): THREE.Texture {
+  const c = document.createElement("canvas"); c.width = c.height = 512;
+  const g = c.getContext("2d")!;
+  const grd = g.createRadialGradient(256, 235, 30, 256, 256, 360);
+  grd.addColorStop(0, "#13284f"); grd.addColorStop(0.5, "#081530"); grd.addColorStop(1, "#01030a");
+  g.fillStyle = grd; g.fillRect(0, 0, 512, 512);
+  return new THREE.CanvasTexture(c);
+}
+scene.background = bgGradient();
+scene.fog = new THREE.FogExp2(0x030a1e, 0.05);
+
+// wide starfield
+const STARS = 1700;
+const starGeo = new THREE.BufferGeometry();
+const starPos = new Float32Array(STARS * 3);
+for (let i = 0; i < STARS; i++) {
+  const r = 3.2 + Math.random() * 7, th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
+  starPos[i * 3] = r * Math.sin(ph) * Math.cos(th);
+  starPos[i * 3 + 1] = r * Math.cos(ph) * 0.72;
+  starPos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
+}
+starGeo.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
+const starfield = new THREE.Points(starGeo, new THREE.PointsMaterial({
+  color: 0xbcd4ff, size: 0.02, transparent: true, opacity: 0.7,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+scene.add(starfield);
+
+// glowing orb nodes drifting around the head, wired by thin lines
+const ORB_COLORS = [0xff5ad0, 0x40d8ff, 0x6c8cff, 0xffc060, 0x6affb0, 0xb070ff];
+const ORBN = 9;
+interface Orb { s: THREE.Sprite; ang: number; rad: number; y: number; spd: number; bob: number; }
+const orbs: Orb[] = [];
+for (let i = 0; i < ORBN; i++) {
+  const s = addGlow(scene, 0, 0, 0, 0.34, ORB_COLORS[i % ORB_COLORS.length]);
+  orbs.push({
+    s, ang: Math.random() * Math.PI * 2, rad: 2.4 + Math.random() * 1.7,
+    y: (Math.random() - 0.5) * 2.6, spd: (0.05 + Math.random() * 0.13) * (Math.random() < 0.5 ? 1 : -1),
+    bob: Math.random() * Math.PI * 2,
+  });
+}
+const orbLineGeo = new THREE.BufferGeometry();
+orbLineGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(ORBN * 2 * 2 * 3), 3));
+scene.add(new THREE.LineSegments(orbLineGeo, new THREE.LineBasicMaterial({
+  color: 0x6a86c8, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false,
+})));
+
+function updateNetwork(t: number) {
+  for (const o of orbs) {
+    o.ang += o.spd * 0.016;
+    o.s.position.set(Math.cos(o.ang) * o.rad, o.y + Math.sin(t * 0.5 + o.bob) * 0.28, Math.sin(o.ang) * o.rad);
+    o.s.scale.setScalar(0.32 * (0.85 + 0.15 * Math.sin(t * 2 + o.bob)));
+  }
+  const lp = orbLineGeo.getAttribute("position") as THREE.BufferAttribute;
+  let li = 0;
+  for (let i = 0; i < orbs.length && li < ORBN * 2; i++) {
+    const near = orbs
+      .map((o, j) => ({ j, d: orbs[i].s.position.distanceToSquared(o.s.position) }))
+      .filter((x) => x.j !== i).sort((a, b) => a.d - b.d).slice(0, 2);
+    for (const { j } of near) {
+      if (li >= ORBN * 2) break;
+      const a = orbs[i].s.position, b = orbs[j].s.position;
+      lp.setXYZ(li * 2, a.x, a.y, a.z); lp.setXYZ(li * 2 + 1, b.x, b.y, b.z); li++;
+    }
+  }
+  for (let k = li; k < ORBN * 2; k++) { lp.setXYZ(k * 2, 0, 0, 0); lp.setXYZ(k * 2 + 1, 0, 0, 0); }
+  lp.needsUpdate = true;
+  starfield.rotation.y = t * 0.012;
+}
+
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), PARAMS[mode].bloom, 0.7, 0.85);
@@ -523,6 +595,7 @@ function animate() {
     e.scale.setScalar(0.135 + 0.02 * Math.sin(t * 3) + boost * 0.1);
   }
   updateAmbient();
+  updateNetwork(t); // glowing orb network drifting around the avatar
   controls.update();
   composer.render();
 }
