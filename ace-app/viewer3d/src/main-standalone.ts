@@ -199,7 +199,7 @@ function buildNeuralPoints(obj: THREE.Object3D) {
 
   // dim the solid mesh so it reads as a translucent web of nodes (reference look)
   const mat = (mesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
-  if (mat) { mat.transparent = true; mat.opacity = 0.12; mat.depthWrite = false; }
+  if (mat) { mat.transparent = true; mat.opacity = 0.24; mat.depthWrite = false; }
 
   // glowing eyes + ACE chip, placed by bounding box (face is +Z)
   (mesh as THREE.Mesh).geometry.computeBoundingBox();
@@ -369,14 +369,14 @@ scene.add(starfield);
 
 // glowing orb nodes drifting around the head, wired by thin lines
 const ORB_COLORS = [0xff5ad0, 0x40d8ff, 0x6c8cff, 0xffc060, 0x6affb0, 0xb070ff];
-const ORBN = 9;
+const ORBN = 7;
 interface Orb { s: THREE.Sprite; ang: number; rad: number; y: number; spd: number; bob: number; }
 const orbs: Orb[] = [];
 for (let i = 0; i < ORBN; i++) {
-  const s = addGlow(scene, 0, 0, 0, 0.34, ORB_COLORS[i % ORB_COLORS.length]);
+  const s = addGlow(scene, 0, 0, 0, 0.26, ORB_COLORS[i % ORB_COLORS.length]);
   orbs.push({
-    s, ang: Math.random() * Math.PI * 2, rad: 2.4 + Math.random() * 1.7,
-    y: (Math.random() - 0.5) * 2.6, spd: (0.05 + Math.random() * 0.13) * (Math.random() < 0.5 ? 1 : -1),
+    s, ang: Math.random() * Math.PI * 2, rad: 3.1 + Math.random() * 1.6,
+    y: (Math.random() - 0.5) * 3.0, spd: (0.05 + Math.random() * 0.13) * (Math.random() < 0.5 ? 1 : -1),
     bob: Math.random() * Math.PI * 2,
   });
 }
@@ -390,7 +390,11 @@ function updateNetwork(t: number) {
   for (const o of orbs) {
     o.ang += o.spd * 0.016;
     o.s.position.set(Math.cos(o.ang) * o.rad, o.y + Math.sin(t * 0.5 + o.bob) * 0.28, Math.sin(o.ang) * o.rad);
-    o.s.scale.setScalar(0.32 * (0.85 + 0.15 * Math.sin(t * 2 + o.bob)));
+    o.s.scale.setScalar(0.24 * (0.85 + 0.15 * Math.sin(t * 2 + o.bob)));
+    // fade any orb that drifts in front of the face so it never covers it
+    const pp = o.s.position;
+    const overFace = pp.z > 0.9 && Math.abs(pp.x) < 1.2 && Math.abs(pp.y) < 1.3;
+    (o.s.material as THREE.SpriteMaterial).opacity = overFace ? 0.1 : 1;
   }
   const lp = orbLineGeo.getAttribute("position") as THREE.BufferAttribute;
   let li = 0;
