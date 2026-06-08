@@ -14,10 +14,10 @@ import { GLB_B64 } from "./embeddedGlb";
 
 type Mode = "idle" | "listening" | "thinking" | "speaking";
 const PARAMS: Record<Mode, { spin: number; bloom: number; speaking: boolean }> = {
-  idle: { spin: 0.15, bloom: 0.9, speaking: false },
-  listening: { spin: 0.25, bloom: 1.25, speaking: false },
-  thinking: { spin: 0.6, bloom: 1.7, speaking: false },
-  speaking: { spin: 0.3, bloom: 1.45, speaking: true },
+  idle: { spin: 0.15, bloom: 1.05, speaking: false },
+  listening: { spin: 0.25, bloom: 1.35, speaking: false },
+  thinking: { spin: 0.6, bloom: 1.8, speaking: false },
+  speaking: { spin: 0.3, bloom: 1.55, speaking: true },
 };
 let mode: Mode = "idle";
 
@@ -164,6 +164,31 @@ const POINT_COUNT = 11000; // glowing nodes sampled over the surface
 const EDGE_NODES = 3600;   // subset used to wire the constellation
 const EDGE_K = 3;          // neighbours per node
 
+// --- face glows (eyes + ACE chip), pinned to the head ----------------------
+const eyeSprites: THREE.Sprite[] = [];
+function glowTexture(): THREE.Texture {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d")!;
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, "rgba(255,255,255,1)");
+  grd.addColorStop(0.22, "rgba(214,236,255,0.92)");
+  grd.addColorStop(0.55, "rgba(150,196,255,0.32)");
+  grd.addColorStop(1, "rgba(120,180,255,0)");
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+const GLOW_TEX = glowTexture();
+function addGlow(parent: THREE.Object3D, x: number, y: number, z: number, size: number, color: number): THREE.Sprite {
+  const mat = new THREE.SpriteMaterial({
+    map: GLOW_TEX, color, transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false, depthTest: false,
+  });
+  const s = new THREE.Sprite(mat);
+  s.position.set(x, y, z); s.scale.setScalar(size);
+  parent.add(s);
+  return s;
+}
+
 function buildNeuralPoints(obj: THREE.Object3D) {
   let mesh: THREE.Mesh | null = null;
   obj.traverse((o) => { if ((o as THREE.SkinnedMesh).isSkinnedMesh && !mesh) mesh = o as THREE.Mesh; });
@@ -172,7 +197,16 @@ function buildNeuralPoints(obj: THREE.Object3D) {
 
   // dim the solid mesh so it reads as a translucent web of nodes (reference look)
   const mat = (mesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
-  if (mat) { mat.transparent = true; mat.opacity = 0.13; mat.depthWrite = false; }
+  if (mat) { mat.transparent = true; mat.opacity = 0.12; mat.depthWrite = false; }
+
+  // glowing eyes + ACE chip, placed by bounding box (face is +Z)
+  (mesh as THREE.Mesh).geometry.computeBoundingBox();
+  const bb = (mesh as THREE.Mesh).geometry.boundingBox!;
+  const cx = (bb.min.x + bb.max.x) / 2, cy = (bb.min.y + bb.max.y) / 2;
+  const W = bb.max.x - bb.min.x, H = bb.max.y - bb.min.y, fz = bb.max.z;
+  eyeSprites.push(addGlow(mesh, cx - 0.145 * W, cy + 0.12 * H, fz * 0.62, 0.13, 0xffffff));
+  eyeSprites.push(addGlow(mesh, cx + 0.145 * W, cy + 0.12 * H, fz * 0.62, 0.13, 0xffffff));
+  addGlow(mesh, cx, cy + 0.235 * H, fz * 0.6, 0.24, 0x9fc4ff); // ACE chip aura (forehead)
 
   const pos = (mesh as THREE.Mesh).geometry.getAttribute("position");
   const stride = Math.max(1, Math.floor(pos.count / POINT_COUNT));
@@ -477,6 +511,13 @@ function animate() {
     pGeo.attributes.position.needsUpdate = true;
   }
   if (mixer) updateNeural(); // points follow the head's skeletal motion
+  // pulse the eyes (brighter while listening/thinking/speaking)
+  const boost = mode === "speaking" ? 0.3 : mode === "thinking" ? 0.22 : mode === "listening" ? 0.26 : 0;
+  const eyeO = Math.min(1, 0.8 + 0.18 * Math.sin(t * 3) + boost);
+  for (const e of eyeSprites) {
+    (e.material as THREE.SpriteMaterial).opacity = eyeO;
+    e.scale.setScalar(0.135 + 0.02 * Math.sin(t * 3) + boost * 0.1);
+  }
   updateAmbient();
   controls.update();
   composer.render();
