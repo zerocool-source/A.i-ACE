@@ -152,11 +152,17 @@ const pMat = new THREE.PointsMaterial({
 });
 scene.add(new THREE.Points(pGeo, pMat));
 
-// --- neural-node points that SKIN with the head (move when it moves) --------
+// --- neural nodes + constellation edges, SKINNED to the head ----------------
 let neuralMesh: THREE.SkinnedMesh | null = null;
 let neuralGeo: THREE.BufferGeometry | null = null;
 let neuralIdx: number[] = [];
+let edgeGeo: THREE.BufferGeometry | null = null;
+let edgePairs: [number, number][] = []; // index pairs into the points buffer
 const _nv = new THREE.Vector3();
+
+const POINT_COUNT = 11000; // glowing nodes sampled over the surface
+const EDGE_NODES = 3600;   // subset used to wire the constellation
+const EDGE_K = 3;          // neighbours per node
 
 function buildNeuralPoints(obj: THREE.Object3D) {
   let mesh: THREE.Mesh | null = null;
@@ -166,10 +172,10 @@ function buildNeuralPoints(obj: THREE.Object3D) {
 
   // dim the solid mesh so it reads as a translucent web of nodes (reference look)
   const mat = (mesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
-  if (mat) { mat.transparent = true; mat.opacity = 0.16; mat.depthWrite = false; }
+  if (mat) { mat.transparent = true; mat.opacity = 0.13; mat.depthWrite = false; }
 
   const pos = (mesh as THREE.Mesh).geometry.getAttribute("position");
-  const stride = Math.max(1, Math.floor(pos.count / 6500));
+  const stride = Math.max(1, Math.floor(pos.count / POINT_COUNT));
   neuralIdx = [];
   const arr: number[] = [];
   for (let i = 0; i < pos.count; i += stride) {
@@ -178,16 +184,69 @@ function buildNeuralPoints(obj: THREE.Object3D) {
   }
   neuralGeo = new THREE.BufferGeometry();
   neuralGeo.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
-  const m = new THREE.PointsMaterial({
-    color: 0xdfeeff, size: 0.014, sizeAttenuation: true, transparent: true,
+  const pm = new THREE.PointsMaterial({
+    color: 0xeaf4ff, size: 0.012, sizeAttenuation: true, transparent: true,
     opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false,
   });
-  (mesh as THREE.Mesh).add(new THREE.Points(neuralGeo, m)); // child → shares object transform
+  (mesh as THREE.Mesh).add(new THREE.Points(neuralGeo, pm));
+
+  // ---- constellation edges: connect each of EDGE_NODES to its nearest few ----
+  const n = Math.min(EDGE_NODES, neuralIdx.length);
+  // bbox of the edge node subset → adaptive connection radius
+  let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = arr[i * 3], y = arr[i * 3 + 1], z = arr[i * 3 + 2];
+    if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+  }
+  const diag = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) || 1;
+  const radius = diag * 0.035;
+  const cell = radius;
+  const grid = new Map<string, number[]>();
+  const key = (x: number, y: number, z: number) =>
+    `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  for (let i = 0; i < n; i++) {
+    const k = key(arr[i * 3], arr[i * 3 + 1], arr[i * 3 + 2]);
+    (grid.get(k) ?? grid.set(k, []).get(k)!).push(i);
+  }
+  const seen = new Set<number>();
+  edgePairs = [];
+  const r2 = radius * radius;
+  for (let i = 0; i < n && edgePairs.length < 16000; i++) {
+    const x = arr[i * 3], y = arr[i * 3 + 1], z = arr[i * 3 + 2];
+    const cx = Math.floor(x / cell), cy = Math.floor(y / cell), cz = Math.floor(z / cell);
+    const cand: { j: number; d: number }[] = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      const bucket = grid.get(`${cx + dx},${cy + dy},${cz + dz}`);
+      if (!bucket) continue;
+      for (const j of bucket) {
+        if (j === i) continue;
+        const d = (arr[j * 3] - x) ** 2 + (arr[j * 3 + 1] - y) ** 2 + (arr[j * 3 + 2] - z) ** 2;
+        if (d <= r2) cand.push({ j, d });
+      }
+    }
+    cand.sort((a, b) => a.d - b.d);
+    for (let c = 0; c < Math.min(EDGE_K, cand.length); c++) {
+      const j = cand[c].j;
+      const pk = i < j ? i * 1e6 + j : j * 1e6 + i;
+      if (seen.has(pk)) continue;
+      seen.add(pk);
+      edgePairs.push([i, j]);
+    }
+  }
+  edgeGeo = new THREE.BufferGeometry();
+  edgeGeo.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(edgePairs.length * 6), 3));
+  const em = new THREE.LineBasicMaterial({
+    color: 0x6fa6e6, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  (mesh as THREE.Mesh).add(new THREE.LineSegments(edgeGeo, em));
+
   if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) neuralMesh = mesh as THREE.SkinnedMesh;
+  updateNeural(); // seed positions
 }
 
-// Each frame, snap the points to the skinned (deformed) vertex positions so they
-// move with the animation. getVertexPosition applies the current bone matrices.
+// Each frame, snap nodes to the skinned (deformed) vertex positions, then rebuild
+// the edge endpoints from them — so the whole web moves with the head.
 function updateNeural() {
   if (!neuralMesh || !neuralGeo || !neuralMesh.skeleton) return;
   const p = neuralGeo.getAttribute("position") as THREE.BufferAttribute;
@@ -196,6 +255,15 @@ function updateNeural() {
     p.setXYZ(i, _nv.x, _nv.y, _nv.z);
   }
   p.needsUpdate = true;
+  if (edgeGeo) {
+    const e = edgeGeo.getAttribute("position") as THREE.BufferAttribute;
+    for (let k = 0; k < edgePairs.length; k++) {
+      const [a, b] = edgePairs[k];
+      e.setXYZ(k * 2, p.getX(a), p.getY(a), p.getZ(a));
+      e.setXYZ(k * 2 + 1, p.getX(b), p.getY(b), p.getZ(b));
+    }
+    e.needsUpdate = true;
+  }
 }
 
 // --- ambient particles drifting off the avatar -----------------------------
