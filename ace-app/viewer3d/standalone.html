@@ -12,11 +12,10 @@
     #app { position:fixed; inset:0; }
     canvas { display:block; }
 
-    /* HUD overlay — design language from the reference spec sheet */
     .hud { position:fixed; inset:0; pointer-events:none; }
     .corner { position:absolute; font-size:11px; letter-spacing:1px; color:#7fa8e0; opacity:.85; }
     .tl { top:18px; left:18px; } .tr { top:18px; right:18px; text-align:right; }
-    .bl { bottom:18px; left:18px; } .br { bottom:18px; right:18px; text-align:right; }
+    .br { bottom:96px; right:18px; text-align:right; }
     .hud h1 { font-size:13px; letter-spacing:4px; color:#dbe9ff; margin-bottom:6px; }
     .spec { display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:10px; }
     .spec b { color:#9bb8e6; font-weight:400; } .spec span { color:#cfe2ff; text-align:right; }
@@ -25,33 +24,41 @@
     .tag.active { color:#8fd0ff; text-shadow:0 0 8px #3a86ff; }
 
     .controls { position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
-                display:flex; gap:10px; pointer-events:auto; }
-    .btn { padding:9px 16px; border-radius:20px; border:1px solid #2a4a7f; background:#0a1424cc;
-           color:#cfe2ff; font:inherit; font-size:13px; cursor:pointer; }
+                display:flex; gap:12px; pointer-events:auto; }
+    .btn { padding:11px 20px; border-radius:22px; border:1px solid #2a4a7f; background:#0a1424cc;
+           color:#cfe2ff; font:inherit; font-size:14px; cursor:pointer; }
     .btn:hover { border-color:#3f6fd8; }
     .btn.on { background:#173a6e; border-color:#3f6fd8; }
     .loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
                font-size:13px; letter-spacing:2px; color:#5b7aa8; }
+
+    .scrim { position:fixed; inset:0; background:#000a; display:none; align-items:center; justify-content:center; padding:24px; z-index:10; }
+    .scrim.show { display:flex; }
+    .card { width:100%; max-width:440px; background:#0a1424; border:1px solid #2a4a7f; border-radius:18px; padding:20px; }
+    .card h2 { font-size:16px; margin-bottom:12px; color:#cfe2ff; letter-spacing:1px; }
+    textarea { width:100%; min-height:84px; background:#060d18; border:1px solid #14233c; border-radius:12px;
+               color:#eaf2ff; font:inherit; font-size:16px; padding:12px; resize:vertical; }
+    .reply { margin-top:14px; padding:12px; background:#060d18; border-radius:12px; color:#bcd4ff; font-size:14px; line-height:1.5; min-height:20px; white-space:pre-wrap; }
+    .row { display:flex; justify-content:flex-end; gap:12px; margin-top:16px; }
+    .brainfield { position:fixed; bottom:70px; left:50%; transform:translateX(-50%); }
+    .brainfield input { width:min(80vw,360px); background:#060d18; border:1px solid #14233c; border-radius:18px;
+                        color:#7fa0d0; font:inherit; font-size:11px; padding:7px 14px; text-align:center; }
+    #graphSvg { width:100%; height:60vh; }
   </style>
 </head>
 <body>
   <div id="app"></div>
   <div class="hud">
-    <div class="corner tl">
-      <h1>ACE</h1>
-      <div class="tag" id="viewlabel">FRONT VIEW</div>
-    </div>
+    <div class="corner tl"><h1>ACE</h1><div class="tag" id="viewlabel">NEURAL CORE</div></div>
     <div class="corner tr">
       <div class="spec">
         <b>TOTAL NODES</b><span>128,000+</span>
         <b>CONNECTIONS</b><span>2.4M+</span>
-        <b>PROCESSING</b><span>MULTI-CORE</span>
-        <b>MEMORY</b><span>&#8734;</span>
         <b>LATENCY</b><span>0.002 SEC</span>
         <b>UPTIME</b><span>100%</span>
       </div>
     </div>
-    <div class="corner bl mode">
+    <div class="corner mode">
       <div class="tag" data-mode="idle">IDLE</div>
       <div class="tag" data-mode="listening">LISTENING</div>
       <div class="tag" data-mode="thinking">THINKING</div>
@@ -59,13 +66,34 @@
     </div>
     <div class="corner br"><div class="tag" id="status">NEURAL CORE ONLINE</div></div>
   </div>
+
+  <div class="brainfield"><input id="brainurl" placeholder="optional: brain service URL (blank = demo)" /></div>
   <div class="controls">
-    <button class="btn" data-set="idle">Idle</button>
-    <button class="btn" data-set="listening">Listening</button>
-    <button class="btn" data-set="thinking">Thinking</button>
-    <button class="btn" data-set="speaking">Speaking</button>
-    <button class="btn" id="hudToggle">HUD</button>
+    <button class="btn" id="askBtn">Ask ACE</button>
+    <button class="btn" id="listenBtn">Listen</button>
+    <button class="btn" id="brainBtn">Brain</button>
   </div>
+
+  <div class="scrim" id="askScrim">
+    <div class="card">
+      <h2>Ask ACE</h2>
+      <textarea id="askText" placeholder="What do you think?"></textarea>
+      <div class="reply" id="askReply"></div>
+      <div class="row">
+        <button class="btn" id="askClose">Close</button>
+        <button class="btn on" id="askSend">Ask</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="scrim" id="brainScrim">
+    <div class="card" style="max-width:560px">
+      <h2>ACE · knowledge graph</h2>
+      <svg id="graphSvg"></svg>
+      <div class="row"><button class="btn on" id="brainClose">Close</button></div>
+    </div>
+  </div>
+
   <div class="loading" id="loading">LOADING NEURAL MESH…</div>
   <script type="module" src="/src/main-standalone.ts"></script>
 </body>

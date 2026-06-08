@@ -160,21 +160,144 @@ function setMode(next: Mode) {
   mode = next;
   document.querySelectorAll<HTMLElement>(".mode .tag").forEach((t) =>
     t.classList.toggle("active", t.dataset.mode === mode));
-  document.querySelectorAll<HTMLElement>(".controls .btn[data-set]").forEach((b) =>
-    b.classList.toggle("on", b.dataset.set === mode));
   document.getElementById("status")!.textContent =
     mode === "speaking" ? "RESPONSE OUTPUT" : mode === "thinking" ? "PROCESSING…" :
     mode === "listening" ? "LISTENING" : "NEURAL CORE ONLINE";
   playClip(mode);
 }
-document.querySelectorAll<HTMLElement>(".controls .btn[data-set]").forEach((b) =>
-  b.addEventListener("click", () => setMode(b.dataset.set as Mode)));
-let hudOn = true;
-document.getElementById("hudToggle")!.addEventListener("click", () => {
-  hudOn = !hudOn;
-  document.querySelector<HTMLElement>(".hud")!.style.display = hudOn ? "block" : "none";
-  document.getElementById("hudToggle")!.classList.toggle("on", hudOn);
-});
+
+/* ---------- ACE app: ask → think → speak, driving the 3D clips ---------- */
+const $ = (id: string) => document.getElementById(id)!;
+const askScrim = $("askScrim"), brainScrim = $("brainScrim");
+const askText = $("askText") as HTMLTextAreaElement;
+const askReply = $("askReply");
+const brainInput = $("brainurl") as HTMLInputElement;
+
+let graph = {
+  nodes: [
+    { id: "Project ACE", ghost: false }, { id: "Knowledge Graph", ghost: false },
+    { id: "Ambient Listening", ghost: false }, { id: "Sam", ghost: false },
+    { id: "Q3 Launch", ghost: true },
+  ],
+  edges: [
+    { from: "Project ACE", to: "Knowledge Graph" }, { from: "Project ACE", to: "Ambient Listening" },
+    { from: "Project ACE", to: "Q3 Launch" }, { from: "Sam", to: "Q3 Launch" },
+  ],
+};
+function demoReply(q: string): string {
+  const t = q.toLowerCase();
+  if (/what.*do|think|take|next/.test(t))
+    return "From what I've heard, the bottleneck is the launch date, not the build. I'd lock the Q3 scope today and have Sam own the graph-sync task.";
+  if (/who|owner|sam/.test(t)) return "Sam picked up the launch thread, so the deadline call is really theirs. I'd get a yes/no from them first.";
+  return "Noted. Ask me \"what do you think?\" while a conversation is fresh and I'll weigh in.";
+}
+
+function speak(text: string) {
+  setMode("speaking");
+  if (window.speechSynthesis) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.0; u.pitch = 0.95;
+    u.onend = () => setMode("idle");
+    u.onerror = () => setMode("idle");
+    speechSynthesis.speak(u);
+  } else {
+    setTimeout(() => setMode("idle"), 2600);
+  }
+}
+async function engage(q: string) {
+  q = q.trim(); if (!q) return;
+  askReply.textContent = ""; setMode("thinking");
+  let answer: string;
+  const url = (brainInput.value || "").trim();
+  if (url) {
+    try {
+      const r = await fetch(url.replace(/\/$/, "") + "/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: [], question: q }),
+      });
+      answer = (await r.json()).reply;
+    } catch { answer = "(couldn't reach the brain service) " + demoReply(q); }
+  } else {
+    await new Promise((r) => setTimeout(r, 900));
+    answer = demoReply(q);
+    const label = "Asked: " + q.slice(0, 16);
+    graph.nodes.push({ id: label, ghost: false });
+    graph.edges.push({ from: "Project ACE", to: label });
+  }
+  askReply.textContent = answer;
+  speak(answer);
+}
+
+function renderGraph() {
+  const svg = $("graphSvg");
+  const w = svg.clientWidth || 520, h = svg.clientHeight || 360;
+  const pos = new Map<string, { x: number; y: number }>();
+  const n = graph.nodes.length;
+  graph.nodes.forEach((nd, i) => {
+    const a = (i / n) * Math.PI * 2;
+    pos.set(nd.id, { x: w / 2 + Math.cos(a) * w * 0.3, y: h / 2 + Math.sin(a) * h * 0.32 });
+  });
+  const k = Math.sqrt((w * h) / Math.max(1, n)) * 0.55;
+  for (let it = 0; it < 120; it++) {
+    const disp = new Map(graph.nodes.map((nd) => [nd.id, { x: 0, y: 0 }]));
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      const a = graph.nodes[i].id, b = graph.nodes[j].id, pa = pos.get(a)!, pb = pos.get(b)!;
+      let dx = pa.x - pb.x, dy = pa.y - pb.y, d = Math.hypot(dx, dy) || 0.01, f = (k * k) / d;
+      dx = dx / d * f; dy = dy / d * f;
+      disp.get(a)!.x += dx; disp.get(a)!.y += dy; disp.get(b)!.x -= dx; disp.get(b)!.y -= dy;
+    }
+    for (const e of graph.edges) {
+      const pa = pos.get(e.from), pb = pos.get(e.to); if (!pa || !pb) continue;
+      let dx = pa.x - pb.x, dy = pa.y - pb.y, d = Math.hypot(dx, dy) || 0.01, f = (d * d) / k;
+      dx = dx / d * f; dy = dy / d * f;
+      disp.get(e.from)!.x -= dx; disp.get(e.from)!.y -= dy; disp.get(e.to)!.x += dx; disp.get(e.to)!.y += dy;
+    }
+    for (const nd of graph.nodes) {
+      const dp = disp.get(nd.id)!, d = Math.hypot(dp.x, dp.y) || 0.01, p = pos.get(nd.id)!;
+      p.x += dp.x / d * Math.min(d, 6); p.y += dp.y / d * Math.min(d, 6);
+      p.x = Math.max(24, Math.min(w - 24, p.x)); p.y = Math.max(24, Math.min(h - 24, p.y));
+    }
+  }
+  const NS = "http://www.w3.org/2000/svg";
+  svg.innerHTML = "";
+  for (const e of graph.edges) {
+    const a = pos.get(e.from), b = pos.get(e.to); if (!a || !b) continue;
+    const l = document.createElementNS(NS, "line");
+    l.setAttribute("x1", "" + a.x); l.setAttribute("y1", "" + a.y);
+    l.setAttribute("x2", "" + b.x); l.setAttribute("y2", "" + b.y);
+    l.setAttribute("stroke", "#2a4a7f"); svg.appendChild(l);
+  }
+  for (const nd of graph.nodes) {
+    const p = pos.get(nd.id)!;
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("cx", "" + p.x); c.setAttribute("cy", "" + p.y);
+    c.setAttribute("r", nd.ghost ? "4" : "7");
+    c.setAttribute("fill", nd.ghost ? "#1c345c" : "#7fb0ff"); svg.appendChild(c);
+    const tx = document.createElementNS(NS, "text");
+    tx.setAttribute("x", "" + (p.x + 9)); tx.setAttribute("y", "" + (p.y + 3));
+    tx.setAttribute("font-size", "10"); tx.setAttribute("fill", "#9bb8e6");
+    tx.textContent = nd.id; svg.appendChild(tx);
+  }
+}
+
+// listen (visual mode; mic optional)
+let listening = false;
+function toggleListen() {
+  const btn = $("listenBtn");
+  if (listening) { listening = false; btn.classList.remove("on"); setMode("idle"); return; }
+  listening = true; btn.classList.add("on"); setMode("listening");
+  navigator.mediaDevices?.getUserMedia({ audio: true }).catch(() => {});
+}
+
+$("askBtn").onclick = () => { askScrim.classList.add("show"); askText.focus(); };
+$("askClose").onclick = () => askScrim.classList.remove("show");
+$("askSend").onclick = () => { const q = askText.value; askText.value = ""; askScrim.classList.remove("show"); engage(q); };
+$("brainBtn").onclick = () => { renderGraph(); brainScrim.classList.add("show"); };
+$("brainClose").onclick = () => brainScrim.classList.remove("show");
+$("listenBtn").onclick = toggleListen;
+renderer.domElement.addEventListener("click", () => { askScrim.classList.add("show"); askText.focus(); });
+
 setMode("idle");
 
 const clock = new THREE.Clock();
