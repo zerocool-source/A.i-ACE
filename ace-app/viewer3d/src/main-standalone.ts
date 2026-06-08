@@ -126,25 +126,27 @@ new GLTFLoader().parse(
 );
 
 // speaking particle stream
-const COUNT = 600;
+const COUNT = 1500;
 const pGeo = new THREE.BufferGeometry();
 const pPos = new Float32Array(COUNT * 3);
 const pVel = new Float32Array(COUNT * 3);
 const pLife = new Float32Array(COUNT);
 function seed(i: number, reset = false) {
-  pPos[i * 3] = (Math.random() - 0.5) * 0.15;
-  pPos[i * 3 + 1] = -0.35 + (Math.random() - 0.5) * 0.1;
-  pPos[i * 3 + 2] = 1.0 + (reset ? 0 : Math.random() * 1.5);
-  pVel[i * 3] = (Math.random() - 0.5) * 0.01;
-  pVel[i * 3 + 1] = (Math.random() - 0.5) * 0.01;
-  pVel[i * 3 + 2] = 0.012 + Math.random() * 0.02;
+  // emit from the mouth (≈ -0.34 y, front +z) as a forward-widening jet
+  pPos[i * 3] = (Math.random() - 0.5) * 0.07;
+  pPos[i * 3 + 1] = -0.34 + (Math.random() - 0.5) * 0.05;
+  pPos[i * 3 + 2] = 0.82 + (reset ? 0 : Math.random() * 1.7);
+  const spread = 0.009;
+  pVel[i * 3] = (Math.random() - 0.5) * spread;
+  pVel[i * 3 + 1] = (Math.random() - 0.5) * spread - 0.0015; // slight droop like the reference
+  pVel[i * 3 + 2] = 0.016 + Math.random() * 0.028;
   pLife[i] = Math.random();
 }
 for (let i = 0; i < COUNT; i++) seed(i);
 pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
 const pMat = new THREE.PointsMaterial({
-  color: 0xcfe4ff,
-  size: 0.022,
+  color: 0xeaf5ff,
+  size: 0.028,
   transparent: true,
   opacity: 0,
   blending: THREE.AdditiveBlending,
@@ -485,6 +487,7 @@ renderer.domElement.addEventListener("click", () => { askScrim.classList.add("sh
 setMode("idle");
 
 const clock = new THREE.Clock();
+let neuralFrame = 0;
 function animate() {
   requestAnimationFrame(animate);
   const t = clock.getElapsedTime();
@@ -498,7 +501,7 @@ function animate() {
     root.scale.setScalar(1 + Math.sin(t * 1.1) * 0.012);
     root.position.y = Math.sin(t * 0.6) * 0.03;
   }
-  const target = p.speaking ? 0.9 : 0;
+  const target = p.speaking ? 1.0 : 0;
   pMat.opacity += (target - pMat.opacity) * 0.1;
   if (pMat.opacity > 0.01) {
     for (let i = 0; i < COUNT; i++) {
@@ -510,10 +513,11 @@ function animate() {
     }
     pGeo.attributes.position.needsUpdate = true;
   }
-  if (mixer) updateNeural(); // points follow the head's skeletal motion
-  // pulse the eyes (brighter while listening/thinking/speaking)
+  if (mixer && (neuralFrame++ & 1) === 0) updateNeural(); // every other frame (perf)
+  // pulse + blink the eyes (brighter while listening/thinking/speaking)
   const boost = mode === "speaking" ? 0.3 : mode === "thinking" ? 0.22 : mode === "listening" ? 0.26 : 0;
-  const eyeO = Math.min(1, 0.8 + 0.18 * Math.sin(t * 3) + boost);
+  const blink = (t % 4.2) < 0.13 ? 0.0 : 1.0; // occasional blink
+  const eyeO = Math.min(1, 0.8 + 0.18 * Math.sin(t * 3) + boost) * blink;
   for (const e of eyeSprites) {
     (e.material as THREE.SpriteMaterial).opacity = eyeO;
     e.scale.setScalar(0.135 + 0.02 * Math.sin(t * 3) + boost * 0.1);
