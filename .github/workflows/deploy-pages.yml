@@ -1,0 +1,68 @@
+name: Deploy ACE preview to GitHub Pages
+
+# Publishes the self-contained ACE previews to a public URL so they open in any
+# browser — no localhost, no download. Runs on push to the dev branch.
+on:
+  push:
+    branches: ["claude/sweet-newton-kqYQR"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site from the committed self-contained previews
+        run: |
+          mkdir -p site
+          cp ace-app/preview.html            site/app.html
+          cp ace-app/viewer3d/ace-3d.html    site/3d.html
+          cat > site/index.html <<'HTML'
+          <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
+          <meta name="viewport" content="width=device-width,initial-scale=1"/>
+          <title>ACE</title>
+          <style>
+            *{margin:0;box-sizing:border-box}
+            body{height:100vh;display:flex;flex-direction:column;align-items:center;
+                 justify-content:center;gap:28px;background:#000;color:#cfe2ff;
+                 font-family:ui-monospace,Menlo,monospace}
+            h1{font-size:42px;letter-spacing:10px;color:#dbe9ff}
+            p{color:#6f8ec0;font-size:13px;letter-spacing:1px}
+            .row{display:flex;gap:18px;flex-wrap:wrap;justify-content:center}
+            a{padding:18px 30px;border:1px solid #2a4a7f;border-radius:16px;
+              background:#0a1424;color:#cfe2ff;text-decoration:none;font-size:16px;
+              transition:.15s}
+            a:hover{border-color:#3f6fd8;background:#173a6e}
+          </style></head><body>
+            <h1>ACE</h1>
+            <div class="row">
+              <a href="3d.html">🧠 3D neural head (rigged · animated)</a>
+              <a href="app.html">💬 ACE app (listen · ask · brain)</a>
+            </div>
+            <p>ambient cognitive engine</p>
+          </body></html>
+          HTML
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
