@@ -1,0 +1,14 @@
+ACE brain — third-party attributions
+====================================
+
+skills.ts adapts the "skills" architecture from OpenJarvis
+(https://github.com/open-jarvis/OpenJarvis), licensed under Apache License 2.0:
+self-describing capabilities that the agent discovers and invokes on demand.
+
+ACE re-implements this pattern in TypeScript for its Claude-based brain (no
+OpenJarvis code is copied verbatim; the design and skill-registry concept are
+credited here). To use OpenJarvis's Python agents directly as an alternative brain
+backend, run OpenJarvis as a service and have ACE's /ask call it — the Skill
+interface in skills.ts is the integration seam.
+
+Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0

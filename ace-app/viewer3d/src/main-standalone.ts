@@ -60,7 +60,7 @@ camera.position.set(0, 0.1, 4.2);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.autoRotate = true;
+controls.autoRotate = false; // face forward, no spin (drag to orbit manually)
 controls.minDistance = 2;
 controls.maxDistance = 8;
 
@@ -110,6 +110,7 @@ new GLTFLoader().parse(
       }
     });
     root.add(obj);
+    buildNeuralPoints(obj); // glowing node dots over the surface (neural look)
     if (g.animations && g.animations.length) {
       mixer = new THREE.AnimationMixer(obj);
       for (const clip of g.animations) actions[clip.name] = mixer.clipAction(clip);
@@ -150,6 +151,59 @@ const pMat = new THREE.PointsMaterial({
   depthWrite: false,
 });
 scene.add(new THREE.Points(pGeo, pMat));
+
+// --- neural-node points sampled over the head surface (the "look") ---------
+function buildNeuralPoints(obj: THREE.Object3D) {
+  let mesh: THREE.Mesh | null = null;
+  obj.traverse((o) => { if ((o as THREE.Mesh).isMesh && !mesh) mesh = o as THREE.Mesh; });
+  if (!mesh) return;
+  const pos = (mesh as THREE.Mesh).geometry.getAttribute("position");
+  const stride = Math.max(1, Math.floor(pos.count / 9000));
+  const pts: number[] = [];
+  for (let i = 0; i < pos.count; i += stride) pts.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+  const m = new THREE.PointsMaterial({
+    color: 0xcfe6ff, size: 0.013, sizeAttenuation: true, transparent: true,
+    opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  (mesh as THREE.Mesh).add(new THREE.Points(g, m)); // child of mesh → shares its transform
+}
+
+// --- ambient particles drifting off the avatar -----------------------------
+const AMB = 280;
+const ambGeo = new THREE.BufferGeometry();
+const ambPos = new Float32Array(AMB * 3);
+const ambVel = new Float32Array(AMB * 3);
+function seedAmb(i: number) {
+  const r = 0.85 + Math.random() * 0.35;
+  const th = Math.random() * Math.PI * 2;
+  const ph = Math.acos(2 * Math.random() - 1);
+  const x = r * Math.sin(ph) * Math.cos(th);
+  const y = r * Math.cos(ph) * 0.95;
+  const z = r * Math.sin(ph) * Math.sin(th);
+  ambPos[i * 3] = x; ambPos[i * 3 + 1] = y; ambPos[i * 3 + 2] = z;
+  const s = 0.0012 + Math.random() * 0.0022;
+  ambVel[i * 3] = x * s; ambVel[i * 3 + 1] = 0.0008 + Math.random() * 0.0014; ambVel[i * 3 + 2] = z * s;
+}
+for (let i = 0; i < AMB; i++) seedAmb(i);
+ambGeo.setAttribute("position", new THREE.BufferAttribute(ambPos, 3));
+const ambMat = new THREE.PointsMaterial({
+  color: 0x9fd0ff, size: 0.02, transparent: true, opacity: 0.5,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const ambient = new THREE.Points(ambGeo, ambMat);
+scene.add(ambient);
+function updateAmbient() {
+  for (let i = 0; i < AMB; i++) {
+    ambPos[i * 3] += ambVel[i * 3];
+    ambPos[i * 3 + 1] += ambVel[i * 3 + 1];
+    ambPos[i * 3 + 2] += ambVel[i * 3 + 2];
+    const d = Math.hypot(ambPos[i * 3], ambPos[i * 3 + 1], ambPos[i * 3 + 2]);
+    if (d > 2.3) seedAmb(i);
+  }
+  ambGeo.attributes.position.needsUpdate = true;
+}
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -326,6 +380,7 @@ function animate() {
     }
     pGeo.attributes.position.needsUpdate = true;
   }
+  updateAmbient();
   controls.update();
   composer.render();
 }
