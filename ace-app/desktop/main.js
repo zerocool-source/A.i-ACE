@@ -17,7 +17,23 @@ function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
 
-  win.loadFile(path.join(__dirname, "renderer", "index.html"));
+  win.loadFile(path.join(__dirname, "renderer", view()));
+
+  // Optional headless capture: ACE_SHOT=<png> renders then writes a screenshot
+  // and quits. Used to preview the app window in CI / containers.
+  if (process.env.ACE_SHOT) {
+    win.webContents.once("did-finish-load", () => {
+      setTimeout(async () => {
+        try {
+          const img = await win.webContents.capturePage();
+          require("fs").writeFileSync(process.env.ACE_SHOT, img.toPNG());
+        } catch (e) {
+          console.error(e);
+        }
+        app.quit();
+      }, 4500);
+    });
+  }
 
   // open any external links in the system browser, not a new app window
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -27,6 +43,13 @@ function createWindow() {
     }
     return { action: "allow" };
   });
+}
+
+// Which renderer page to open (ACE_VIEW=3d|app, default = landing).
+function view() {
+  if (process.env.ACE_VIEW === "3d") return "3d.html";
+  if (process.env.ACE_VIEW === "app") return "app.html";
+  return "index.html";
 }
 
 app.whenReady().then(() => {
