@@ -152,22 +152,50 @@ const pMat = new THREE.PointsMaterial({
 });
 scene.add(new THREE.Points(pGeo, pMat));
 
-// --- neural-node points sampled over the head surface (the "look") ---------
+// --- neural-node points that SKIN with the head (move when it moves) --------
+let neuralMesh: THREE.SkinnedMesh | null = null;
+let neuralGeo: THREE.BufferGeometry | null = null;
+let neuralIdx: number[] = [];
+const _nv = new THREE.Vector3();
+
 function buildNeuralPoints(obj: THREE.Object3D) {
   let mesh: THREE.Mesh | null = null;
-  obj.traverse((o) => { if ((o as THREE.Mesh).isMesh && !mesh) mesh = o as THREE.Mesh; });
+  obj.traverse((o) => { if ((o as THREE.SkinnedMesh).isSkinnedMesh && !mesh) mesh = o as THREE.Mesh; });
+  if (!mesh) obj.traverse((o) => { if ((o as THREE.Mesh).isMesh && !mesh) mesh = o as THREE.Mesh; });
   if (!mesh) return;
+
+  // dim the solid mesh so it reads as a translucent web of nodes (reference look)
+  const mat = (mesh as THREE.Mesh).material as THREE.MeshStandardMaterial;
+  if (mat) { mat.transparent = true; mat.opacity = 0.16; mat.depthWrite = false; }
+
   const pos = (mesh as THREE.Mesh).geometry.getAttribute("position");
-  const stride = Math.max(1, Math.floor(pos.count / 9000));
-  const pts: number[] = [];
-  for (let i = 0; i < pos.count; i += stride) pts.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+  const stride = Math.max(1, Math.floor(pos.count / 6500));
+  neuralIdx = [];
+  const arr: number[] = [];
+  for (let i = 0; i < pos.count; i += stride) {
+    neuralIdx.push(i);
+    arr.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+  }
+  neuralGeo = new THREE.BufferGeometry();
+  neuralGeo.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
   const m = new THREE.PointsMaterial({
-    color: 0xcfe6ff, size: 0.013, sizeAttenuation: true, transparent: true,
+    color: 0xdfeeff, size: 0.014, sizeAttenuation: true, transparent: true,
     opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false,
   });
-  (mesh as THREE.Mesh).add(new THREE.Points(g, m)); // child of mesh → shares its transform
+  (mesh as THREE.Mesh).add(new THREE.Points(neuralGeo, m)); // child → shares object transform
+  if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) neuralMesh = mesh as THREE.SkinnedMesh;
+}
+
+// Each frame, snap the points to the skinned (deformed) vertex positions so they
+// move with the animation. getVertexPosition applies the current bone matrices.
+function updateNeural() {
+  if (!neuralMesh || !neuralGeo || !neuralMesh.skeleton) return;
+  const p = neuralGeo.getAttribute("position") as THREE.BufferAttribute;
+  for (let i = 0; i < neuralIdx.length; i++) {
+    neuralMesh.getVertexPosition(neuralIdx[i], _nv);
+    p.setXYZ(i, _nv.x, _nv.y, _nv.z);
+  }
+  p.needsUpdate = true;
 }
 
 // --- ambient particles drifting off the avatar -----------------------------
@@ -380,6 +408,7 @@ function animate() {
     }
     pGeo.attributes.position.needsUpdate = true;
   }
+  if (mixer) updateNeural(); // points follow the head's skeletal motion
   updateAmbient();
   controls.update();
   composer.render();
