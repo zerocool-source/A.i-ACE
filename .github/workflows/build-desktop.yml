@@ -1,0 +1,34 @@
+name: Build ACE desktop (.dmg)
+
+# Builds the macOS .dmg on a GitHub-hosted macOS runner (you don't need a Mac).
+# Download the result from the run's Artifacts. Also builds Windows/Linux on demand.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["claude/sweet-newton-kqYQR"]
+    paths: ["ace-app/desktop/**", "ace-app/viewer3d/ace-3d.html", "ace-app/preview.html"]
+
+jobs:
+  mac-dmg:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ace-app/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: npm install
+      - name: Build .dmg (unsigned)
+        run: npm run dist:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false # no Apple signing cert — build unsigned
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: ACE-macos-dmg
+          path: ace-app/desktop/dist/*.dmg
+          if-no-files-found: error

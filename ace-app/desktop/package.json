@@ -1,0 +1,31 @@
+{
+  "name": "ace-desktop",
+  "version": "0.1.0",
+  "description": "ACE — Ambient Cognitive Engine (desktop)",
+  "author": "ACE",
+  "main": "main.js",
+  "scripts": {
+    "prep": "node scripts/prep.mjs",
+    "dev": "npm run prep && electron .",
+    "dist:mac": "npm run prep && electron-builder --mac dmg",
+    "dist:win": "npm run prep && electron-builder --win nsis",
+    "dist:linux": "npm run prep && electron-builder --linux AppImage"
+  },
+  "build": {
+    "appId": "ai.ace.desktop",
+    "productName": "ACE",
+    "files": ["main.js", "renderer/**/*"],
+    "directories": { "output": "dist" },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.productivity"
+    },
+    "dmg": { "title": "ACE" },
+    "win": { "target": ["nsis"] },
+    "linux": { "target": ["AppImage"], "category": "Utility" }
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}
