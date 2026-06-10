@@ -327,13 +327,30 @@ async function tryLoadPlaylist() {
   }
 }
 
+let failedTracks = 0;
+
 function playNextTrack() {
   if (!playlist || !playlist.length) return;
+  if (failedTracks >= playlist.length) {
+    // every listed file is missing — fall back to the procedural ambient bed
+    musicEl = null;
+    startAmbientLoop();
+    return;
+  }
   const file = playlist[playlistIndex % playlist.length];
   playlistIndex++;
   musicEl = new Audio(asset('audio/' + file));
   musicEl.volume = 0.4;
-  musicEl.addEventListener('ended', playNextTrack);
+  musicEl.addEventListener('ended', () => {
+    failedTracks = 0;
+    playNextTrack();
+  });
+  // skip tracks that 404 so the playlist can be pre-filled before the
+  // mp3s are dropped in
+  musicEl.addEventListener('error', () => {
+    failedTracks++;
+    playNextTrack();
+  });
   musicEl.play().catch(() => {});
 }
 
