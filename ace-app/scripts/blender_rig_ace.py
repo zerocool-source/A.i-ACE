@@ -69,6 +69,8 @@ corners = [mesh.matrix_world @ Vector(c) for c in mesh.bound_box]
 xs = [v.x for v in corners]; ys = [v.y for v in corners]; zs = [v.z for v in corners]
 cx = (min(xs) + max(xs)) / 2
 cy = (min(ys) + max(ys)) / 2
+y0, y1 = min(ys), max(ys)
+D = y1 - y0  # depth; glTF import faces -Y in Blender
 z0, z1 = min(zs), max(zs)
 H = z1 - z0
 
@@ -83,26 +85,58 @@ head_bone = arm_data.edit_bones.new("Head")
 # vertical bone spanning the head + neck so deformation is rigid and clean
 head_bone.head = Vector((cx, cy, z0 + 0.35 * H))
 head_bone.tail = Vector((cx, cy, z0 + 0.95 * H))
+# jaw: hinge near the ear line, tail toward the chin (front = -Y after glTF import)
+jaw_bone = arm_data.edit_bones.new("Jaw")
+jaw_bone.parent = head_bone
+jaw_bone.head = Vector((cx, cy, z0 + 0.46 * H))
+jaw_bone.tail = Vector((cx, cy - 0.20 * D, z0 + 0.36 * H))
 bpy.ops.object.mode_set(mode="OBJECT")
 
-# ---- bind mesh (rigid: whole head → Head bone) ----------------------------
-# Parent "with empty groups" adds an Armature modifier + a 'Head' vertex group,
-# then we assign every vertex to it at full weight. For a single head bone this
-# rigid bind is exactly what we want (the head moves as one) and it sidesteps the
-# bone-heat-weighting solver, which fails on dense photogrammetry-style meshes.
+# ---- bind mesh (Head rigid + Jaw region with smooth falloff) ---------------
+# Parent with named groups, give every vertex Head weight 1, then carve out the
+# jaw region (lower front of the face) with a smooth blend so the mouth/chin can
+# open without tearing. This sidesteps bone-heat weighting, which fails on dense
+# photogrammetry-style meshes.
 bpy.ops.object.select_all(action="DESELECT")
 mesh.select_set(True)
 arm.select_set(True)
 bpy.context.view_layer.objects.active = arm
 bpy.ops.object.parent_set(type="ARMATURE_NAME")
 
-vg = mesh.vertex_groups.get("Head") or mesh.vertex_groups.new(name="Head")
-vg.add([v.index for v in mesh.data.vertices], 1.0, "REPLACE")
+vg_head = mesh.vertex_groups.get("Head") or mesh.vertex_groups.new(name="Head")
+vg_jaw = mesh.vertex_groups.get("Jaw") or mesh.vertex_groups.new(name="Jaw")
+vg_head.add([v.index for v in mesh.data.vertices], 1.0, "REPLACE")
+
+Z_HINGE = z0 + 0.45 * H   # jaw weight starts below this
+Z_CHIN = z0 + 0.355 * H   # full jaw weight by here
+Z_LOW = z0 + 0.28 * H     # fades out into the neck below this
+mw = mesh.matrix_world
+jaw_count = 0
+for v in mesh.data.vertices:
+    co = mw @ v.co
+    z, y = co.z, co.y
+    if z >= Z_HINGE or z < Z_LOW:
+        continue
+    if z >= Z_CHIN:
+        zf = (Z_HINGE - z) / (Z_HINGE - Z_CHIN)
+    else:
+        zf = (z - Z_LOW) / (Z_CHIN - Z_LOW)
+        zf = max(0.0, min(1.0, zf))
+    ff = (cy - y) / (0.18 * D)  # front-only factor (face is -Y)
+    ff = max(0.0, min(1.0, ff))
+    w = zf * ff
+    if w > 0.01:
+        vg_jaw.add([v.index], w, "REPLACE")
+        vg_head.add([v.index], 1.0 - w, "REPLACE")
+        jaw_count += 1
+print(f"jaw region: {jaw_count} vertices weighted")
 
 # ---- animation helpers ----------------------------------------------------
 arm.animation_data_create()
 pb = arm.pose.bones["Head"]
 pb.rotation_mode = "XYZ"
+pb_jaw = arm.pose.bones["Jaw"]
+pb_jaw.rotation_mode = "XYZ"
 FPS = 24
 bpy.context.scene.render.fps = FPS
 
@@ -118,11 +152,19 @@ def key(frame, rx=0.0, ry=0.0, rz=0.0):
     pb.keyframe_insert("rotation_euler", frame=frame)
 
 
-def make_loop(name, frames):
-    """frames: list of (frame, rx, ry, rz). First==last keeps it seamless."""
+def key_jaw(frame, deg):
+    pb_jaw.rotation_euler = (math.radians(deg), 0.0, 0.0)
+    pb_jaw.keyframe_insert("rotation_euler", frame=frame)
+
+
+def make_loop(name, frames, jaw=None):
+    """frames: list of (frame, rx, ry, rz); jaw: list of (frame, open_degrees)."""
     new_action(name)
     for f, rx, ry, rz in frames:
         key(f, rx, ry, rz)
+    # always key the jaw so clips don't inherit another clip's mouth pose
+    for f, deg in (jaw or [(frames[0][0], 0.0), (frames[-1][0], 0.0)]):
+        key_jaw(f, deg)
 
 
 # ACE_Idle — gentle breathing nod
@@ -138,10 +180,14 @@ make_loop("ACE_Listening", [
 make_loop("ACE_Thinking", [
     (1, 0, 0, 0), (48, 0, 0, 6.0), (96, 0, 0, -6.0), (144, 0, 0, 0),
 ])
-# ACE_Speaking — quick talking nods
+# ACE_Speaking — talking nods + jaw chatter (mouth opens/closes like speech)
 make_loop("ACE_Speaking", [
     (1, 0, 0, 0), (8, 2.5, 0, 0), (16, 0, 0, 0), (24, 2.0, 0, 0),
     (32, 0, 0, 0), (40, 2.5, 0, 0), (48, 0, 0, 0),
+], jaw=[
+    (1, 0), (4, 9), (7, 2), (10, 11), (13, 3), (16, 8), (19, 1),
+    (22, 12), (25, 4), (28, 9), (31, 2), (34, 11), (37, 3), (40, 8),
+    (43, 2), (46, 7), (48, 0),
 ])
 
 # push every action onto its own NLA track so the exporter emits all of them
