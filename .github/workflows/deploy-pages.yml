@@ -2,7 +2,7 @@ name: Deploy DEAD ZONE to GitHub Pages
 
 on:
   push:
-    branches: [claude/admiring-cannon-p0epgo]
+    branches: [claude/keen-keller-6cwOk] # default branch — github-pages env only deploys from it
     paths:
       - 'dead-zone/**'
       - '.github/workflows/deploy-pages.yml'
