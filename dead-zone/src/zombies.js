@@ -56,6 +56,8 @@ export function waveComposition(wave) {
   if (wave >= 4) for (let i = 0; i < Math.floor(wave * 0.6); i++) list.push('spitter');
   if (wave >= 5) for (let i = 0; i < Math.floor(wave * 0.55); i++) list.push('exploder');
   if (wave >= 6) for (let i = 0; i < Math.max(1, Math.floor(wave * 0.25)); i++) list.push('screamer');
+  // every wave fields at least 100 zombies
+  while (list.length < 100) list.push(Math.random() < 0.75 ? 'walker' : 'runner');
   return list;
 }
 

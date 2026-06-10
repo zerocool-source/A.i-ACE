@@ -567,6 +567,11 @@ function nextWave() {
   if (game.wave > 1) squadBanter();
   game.spawnQueue = comp;
   game.spawnTimer = 0;
+  // dump an opening surge so the wave hits immediately
+  const surge = Math.min(30, 15 + game.wave);
+  for (let i = 0; i < surge && game.spawnQueue.length; i++) {
+    game.zombies.push(spawnLevelZombie(game.spawnQueue.shift()));
+  }
 }
 
 function spawnLevelZombie(type) {
@@ -745,20 +750,9 @@ function cycleWeapon(dir) {
 }
 
 function zombieTarget(z) {
-  // nearest living thing: player, squad, civilians
-  const g = game;
-  let best = g.player;
-  let bestD = Math.hypot(g.player.x - z.x, g.player.y - z.y) * 0.92; // slight pull toward the player
-  for (const a of g.allies) {
-    if (a.down) continue;
-    const d = Math.hypot(a.x - z.x, a.y - z.y);
-    if (d < bestD) { best = a; bestD = d; }
-  }
-  for (const c of g.civilians) {
-    const d = Math.hypot(c.x - z.x, c.y - z.y);
-    if (d < bestD) { best = c; bestD = d; }
-  }
-  return { t: best, d: Math.hypot(best.x - z.x, best.y - z.y) };
+  // the horde hunts the player and only the player
+  const p = game.player;
+  return { t: p, d: Math.hypot(p.x - z.x, p.y - z.y) };
 }
 
 function update(dt) {
@@ -1005,28 +999,47 @@ function update(dt) {
       }
     }
     z.attackCooldown -= dt;
-    if (distT < z.radius + (target.radius ?? 14) + 4 && z.attackCooldown <= 0) {
-      z.attackCooldown = 0.8;
-      if (target === p) {
-        if (g.time < p.invulnUntil) continue; // dash i-frames
-        const dmg = Math.max(1, z.damage - effArmor());
-        p.hp -= dmg;
-        p.hurtFlash = 0.25;
-        addScreenBlood(1);
-        spawnBlood(p.x, p.y, 8, '#c62828');
-        g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#ef5350', life: 0.8, vy: -50 });
-      } else if (g.allies.includes(target)) {
-        target.hp -= z.damage;
-        spawnBlood(target.x, target.y, 6, '#c62828');
-        if (target.hp <= 0 && !target.down) {
-          target.down = true;
-          banner(`${target.name} IS DOWN`, 'back up at the next wave', '#ef9a9a');
-          goreKill(target.x, target.y, target.radius, null, false);
+    if (z.attackCooldown <= 0) {
+      if (distT < z.radius + p.radius + 4) {
+        // the player is the prey
+        z.attackCooldown = 0.8;
+        if (g.time >= p.invulnUntil) { // dash i-frames
+          const dmg = Math.max(1, z.damage - effArmor());
+          p.hp -= dmg;
+          p.hurtFlash = 0.25;
+          addScreenBlood(1);
+          spawnBlood(p.x, p.y, 8, '#c62828');
+          g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#ef5350', life: 0.8, vy: -50 });
         }
       } else {
-        // civilian mauled
-        target.hp -= z.damage;
-        if (target.hp <= 0) target.dead = true;
+        // opportunistic swipes at anything that blunders into reach
+        let swiped = false;
+        for (const a of g.allies) {
+          if (a.down) continue;
+          if (Math.hypot(a.x - z.x, a.y - z.y) < z.radius + a.radius + 4) {
+            z.attackCooldown = 0.8;
+            a.hp -= z.damage;
+            spawnBlood(a.x, a.y, 6, '#c62828');
+            if (a.hp <= 0 && !a.down) {
+              a.down = true;
+              banner(`${a.name} IS DOWN`, 'back up at the next wave', '#ef9a9a');
+              goreKill(a.x, a.y, a.radius, null, false);
+            }
+            swiped = true;
+            break;
+          }
+        }
+        if (!swiped) {
+          for (const c of g.civilians) {
+            if (c.dead) continue;
+            if (Math.hypot(c.x - z.x, c.y - z.y) < z.radius + c.radius + 4) {
+              z.attackCooldown = 0.8;
+              c.hp -= z.damage;
+              if (c.hp <= 0) c.dead = true;
+              break;
+            }
+          }
+        }
       }
     }
     // spitter: stop at range and lob acid at its target
