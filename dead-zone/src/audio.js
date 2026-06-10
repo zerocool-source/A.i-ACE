@@ -266,6 +266,34 @@ export function playFanfare() {
   });
 }
 
+export function playScream() {
+  const c = ac();
+  const t = c.currentTime;
+  const base = 600 + Math.random() * 300;
+  const osc = c.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(base, t);
+  osc.frequency.exponentialRampToValueAtTime(base * 0.4, t + 0.5);
+  const vib = c.createOscillator();
+  vib.frequency.value = 18;
+  const vibGain = c.createGain();
+  vibGain.gain.value = 60;
+  vib.connect(vibGain).connect(osc.frequency);
+  const filt = c.createBiquadFilter();
+  filt.type = 'bandpass';
+  filt.frequency.value = 1200;
+  filt.Q.value = 1.5;
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.001, t);
+  g.gain.exponentialRampToValueAtTime(0.18, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+  osc.connect(filt).connect(g).connect(master);
+  osc.start(t);
+  osc.stop(t + 0.6);
+  vib.start(t);
+  vib.stop(t + 0.6);
+}
+
 export function playGameOverSting() {
   const c = ac();
   const t = c.currentTime;

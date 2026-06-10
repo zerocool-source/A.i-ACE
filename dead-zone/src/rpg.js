@@ -1,6 +1,6 @@
 // RPG layer: character XP/levels, four allocatable attributes, scrap currency,
 // weapon upgrade tiers, gear — persisted to localStorage between sessions.
-import { WEAPONS, WEAPON_ORDER } from './weapons.js';
+import { WEAPONS, WEAPON_ORDER, STARTING_WEAPONS } from './weapons.js';
 
 const SAVE_KEY = 'deadzone-save-v1';
 
@@ -19,6 +19,8 @@ export function newCharacter() {
     attrs: { str: 0, agi: 0, vit: 0, tech: 0 },
     scrap: 0,
     weaponTiers: Object.fromEntries(WEAPON_ORDER.map((w) => [w, 0])),
+    ownedWeapons: [...STARTING_WEAPONS],
+    gender: 'm',
     armor: 0,
     higgsBatteries: 0,
     campaignLevel: 0, // index into LEVELS
@@ -81,7 +83,20 @@ export const MAX_BATTERIES = 3;
 export function shopCatalog(char, playerHp) {
   const d = derived(char);
   const items = [];
+  // unowned store guns first — buying unlocks the weapon slot
   for (const w of WEAPON_ORDER) {
+    if (char.ownedWeapons.includes(w)) continue;
+    items.push({
+      id: 'buy-' + w,
+      name: `★ BUY ${WEAPONS[w].name}`,
+      desc: w === 'magnum' ? 'Hand cannon — pierces 3 zombies per shot [5]' : 'Bullet hose — 120-round drum [6]',
+      cost: WEAPONS[w].price,
+      maxed: false,
+      buy: (c) => c.ownedWeapons.push(w),
+    });
+  }
+  for (const w of WEAPON_ORDER) {
+    if (!char.ownedWeapons.includes(w)) continue;
     const t = char.weaponTiers[w];
     items.push({
       id: 'wep-' + w,
@@ -133,7 +148,16 @@ export function loadCharacter() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const c = { ...newCharacter(), ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    const base = newCharacter();
+    const c = {
+      ...base,
+      ...parsed,
+      // deep-merge nested maps so saves from older versions gain new keys
+      attrs: { ...base.attrs, ...(parsed.attrs || {}) },
+      weaponTiers: { ...base.weaponTiers, ...(parsed.weaponTiers || {}) },
+      ownedWeapons: parsed.ownedWeapons || base.ownedWeapons,
+    };
     if (c.campaignLevel == null || !c.attrs) return null;
     return c;
   } catch {

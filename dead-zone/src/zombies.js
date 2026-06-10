@@ -21,11 +21,10 @@ export const ZOMBIE_TYPES = {
 
 export function waveComposition(wave) {
   const list = [];
-  const walkers = 5 + wave * 3;
+  const walkers = 7 + Math.round(wave * 3.5);
   for (let i = 0; i < walkers; i++) list.push('walker');
-  if (wave >= 2) for (let i = 0; i < Math.floor(wave * 1.5); i++) list.push('runner');
-  if (wave >= 3) for (let i = 0; i < Math.floor(wave / 2); i++) list.push('brute');
-  if (wave >= 10 && wave % 5 === 0) list.push('boss');
+  if (wave >= 2) for (let i = 0; i < Math.floor(wave * 2); i++) list.push('runner');
+  if (wave >= 3) for (let i = 0; i < Math.floor(wave * 0.7); i++) list.push('brute');
   return list;
 }
 

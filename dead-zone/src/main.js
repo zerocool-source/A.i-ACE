@@ -1,34 +1,29 @@
 import { initInput, input, wasPressed, consumePressed } from './input.js';
 import { WEAPONS, WEAPON_ORDER } from './weapons.js';
-import { waveComposition, spawnZombie } from './zombies.js';
+import { waveComposition, spawnZombie, ZOMBIE_TYPES } from './zombies.js';
 import { LEVELS, VICTORY_ART, EPILOGUE } from './levels.js';
 import {
   ATTRS, newCharacter, xpForLevel, grantXp, derived, weaponStats,
   shopCatalog, saveCharacter, loadCharacter, wipeSave,
 } from './rpg.js';
+import { pollGamepad, gpPressed, gamepad } from './gamepad.js';
 import * as sfx from './audio.js';
 import { asset } from './assets.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
-// persistent blood decals live on an offscreen canvas so they never repaint
-let decalCanvas = document.createElement('canvas');
-let decalCtx = decalCanvas.getContext('2d');
-
 function resize() {
-  const keep = document.createElement('canvas');
-  keep.width = decalCanvas.width || 1;
-  keep.height = decalCanvas.height || 1;
-  keep.getContext('2d').drawImage(decalCanvas, 0, 0);
-  canvas.width = decalCanvas.width = window.innerWidth;
-  canvas.height = decalCanvas.height = window.innerHeight;
-  decalCtx = decalCanvas.getContext('2d');
-  decalCtx.drawImage(keep, 0, 0);
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 }
 window.addEventListener('resize', resize);
 resize();
 initInput(canvas);
+
+// persistent blood decals live on a world-sized offscreen canvas per level
+let decalCanvas = document.createElement('canvas');
+let decalCtx = decalCanvas.getContext('2d');
 
 // ---- image cache ---------------------------------------------------------
 
@@ -46,8 +41,6 @@ function getImage(url) {
 
 // Generated top-down sprites (all face right). Every draw call falls back to
 // the procedural shapes until its sprite finishes loading / if it's missing.
-// Generations carry different amounts of empty padding, so each sprite is
-// trimmed to its alpha bounding box once it loads.
 const SPRITES = {};
 
 function trimToAlphaBounds(img) {
@@ -76,7 +69,8 @@ function trimToAlphaBounds(img) {
   return t;
 }
 
-for (const name of ['player', 'walker', 'runner', 'brute', 'boss']) {
+for (const name of ['player', 'player_f', 'soldier', 'commander', 'civilian_m', 'civilian_f',
+                    'walker', 'runner', 'brute', 'boss']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -96,8 +90,9 @@ titleArt.src = asset('title-bg.png');
 // ---- state -----------------------------------------------------------------
 
 const HIGGS = { radius: 190, slowFactor: 0.25, slowDuration: 5, knockback: 420 };
+const WORLD_BASE = { w: 2400, h: 1650 };
 
-let state = 'title'; // title | levelintro | playing | shop | gameover | victory
+let state = 'title'; // title | charselect | cutscene | levelintro | playing | shop | gameover | victory
 let char = loadCharacter();
 let hasSave = !!char;
 if (!char) char = newCharacter();
@@ -105,6 +100,9 @@ let game = null;
 let charSheetOpen = false;
 let banners = []; // {text, sub, t, color}
 let briefingStart = 0; // typewriter clock for the level-intro story text
+let screenBlood = []; // splatter stuck to the camera: {fx, fy, r, alpha}
+let gpFocus = 0; // gamepad focus index into uiButtons
+let cam = { x: 0, y: 0 };
 
 function enterLevelIntro() {
   state = 'levelintro';
@@ -126,7 +124,6 @@ const OPENING_SHOTS = [
 ];
 
 function startCutscene(shots, onDone) {
-  // preload every shot up front so transitions don't pop
   for (const s of shots) if (s.img) getImage(s.img);
   cutscene = { shots, idx: 0, t: 0, onDone };
   state = 'cutscene';
@@ -156,7 +153,6 @@ function drawCutscene(dt) {
       const s = Math.max(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight) * zoom;
       const w = img.naturalWidth * s;
       const h = img.naturalHeight * s;
-      // fade in/out at the shot boundaries
       const fade = Math.min(1, cutscene.t / 0.8, (shot.duration - cutscene.t) / 0.8);
       ctx.globalAlpha = Math.max(0, fade);
       ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
@@ -164,13 +160,11 @@ function drawCutscene(dt) {
     }
   }
 
-  // letterbox bars
   const bar = Math.round(canvas.height * 0.11);
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, bar);
   ctx.fillRect(0, canvas.height - bar, canvas.width, bar);
 
-  // typewriter captions inside the lower bar area
   let budget = Math.floor(cutscene.t * 40);
   let yy = canvas.height - bar + 18;
   ctx.save();
@@ -187,13 +181,14 @@ function drawCutscene(dt) {
   ctx.textAlign = 'right';
   ctx.font = '12px monospace';
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.fillText('click to skip ▸', canvas.width - 20, 12);
+  ctx.fillText('click / Ⓐ to skip ▸', canvas.width - 20, 12);
   ctx.restore();
 
   if (cutscene.t >= shot.duration) advanceCutscene();
 }
 
-// clickable UI regions built during render, consumed at the start of the next frame
+// ---- UI buttons -------------------------------------------------------------
+
 let uiButtons = [];
 function button(x, y, w, h, cb, enabled = true) {
   uiButtons.push({ x, y, w, h, cb, enabled });
@@ -207,9 +202,18 @@ function banner(text, sub, color = '#d32f2f') {
   banners.push({ text, sub, t: 2.4, color });
 }
 
+// ---- game setup --------------------------------------------------------------
+
+const ALLY_DEFS = {
+  soldier: { name: 'SGT. REYES', hp: 160, damage: 26, fireInterval: 0.22, range: 620, color: '#81c784' },
+  commander: { name: 'CDR. HALE', hp: 220, damage: 60, fireInterval: 0.6, range: 700, color: '#ffcc80' },
+};
+
 function newGame() {
   const d = derived(char);
-  return {
+  const lv = level();
+  const world = { w: Math.round(WORLD_BASE.w * lv.sizeMult), h: Math.round(WORLD_BASE.h * lv.sizeMult) };
+  const g = {
     time: 0,
     score: 0,
     kills: 0,
@@ -218,8 +222,10 @@ function newGame() {
     spawnTimer: 0,
     intermission: 0,
     levelClearing: false,
+    infectionBannerShown: false,
+    world,
     player: {
-      x: canvas.width / 2, y: canvas.height / 2,
+      x: world.w / 2, y: world.h / 2,
       radius: 14,
       hp: Math.min(char.hp ?? d.maxHp, d.maxHp),
       speed: 220, sprintMult: 1.6,
@@ -233,27 +239,88 @@ function newGame() {
       angle: 0,
     },
     zombies: [],
+    civilians: [],
+    allies: [],
     bullets: [],
     particles: [],
+    gibs: [],
+    corpses: [],
     scraps: [],
     dmgNumbers: [],
     higgs: { charge: 1, activeUntil: 0, ringT: -1 },
   };
+  // civilians scattered around the map, fleeing for their lives
+  for (let i = 0; i < lv.civilians; i++) {
+    g.civilians.push({
+      x: 100 + Math.random() * (world.w - 200),
+      y: 100 + Math.random() * (world.h - 200),
+      hp: 30, radius: 11,
+      speed: 110 + Math.random() * 50,
+      angle: Math.random() * Math.PI * 2,
+      wobble: Math.random() * Math.PI * 2,
+      sprite: Math.random() < 0.5 ? 'civilian_m' : 'civilian_f',
+      panicTimer: 0,
+    });
+  }
+  // the squad joins as the story progresses
+  if (char.campaignLevel >= 1) g.allies.push(makeAlly('soldier', world));
+  if (char.campaignLevel >= 3) g.allies.push(makeAlly('commander', world));
+  return g;
+}
+
+function makeAlly(type, world) {
+  const def = ALLY_DEFS[type];
+  return {
+    type, name: def.name,
+    x: world.w / 2 + (Math.random() - 0.5) * 120,
+    y: world.h / 2 + (Math.random() - 0.5) * 120,
+    hp: def.hp, maxHp: def.hp,
+    radius: 13,
+    angle: 0,
+    fireCooldown: 0,
+    damage: def.damage,
+    fireInterval: def.fireInterval,
+    range: def.range,
+    color: def.color,
+    down: false,
+  };
 }
 
 function startLevel() {
-  decalCtx.clearRect(0, 0, decalCanvas.width, decalCanvas.height);
   game = newGame();
+  decalCanvas = document.createElement('canvas');
+  decalCanvas.width = game.world.w;
+  decalCanvas.height = game.world.h;
+  decalCtx = decalCanvas.getContext('2d');
+  screenBlood = [];
   state = 'playing';
   charSheetOpen = false;
+  if (char.campaignLevel === 1 && !char.metSoldier) {
+    char.metSoldier = true;
+    saveCharacter(char);
+    banner('SGT. REYES JOINS YOUR SQUAD', 'a soldier fights at your side', '#81c784');
+  }
+  if (char.campaignLevel === 3 && !char.metCommander) {
+    char.metCommander = true;
+    saveCharacter(char);
+    banner('CDR. HALE JOINS YOUR SQUAD', 'the commander brought her magnum', '#ffcc80');
+  }
+  if (char.campaignLevel === 0) banner('THE OUTBREAK', 'protect who you can', '#ef9a9a');
   nextWave();
 }
 
 function nextWave() {
   const lv = level();
   game.wave++;
+  // revive downed squad members between waves
+  for (const a of game.allies) {
+    if (a.down) {
+      a.down = false;
+      a.hp = a.maxHp * 0.5;
+    }
+  }
   const effW = char.campaignLevel * lv.waves + game.wave;
-  let comp = waveComposition(effW).filter((t) => t !== 'boss');
+  let comp = waveComposition(effW);
   const extra = Math.floor(comp.length * (lv.countMult - 1));
   for (let i = 0; i < extra; i++) comp.push(comp[Math.floor(Math.random() * comp.length)]);
   if (game.wave === lv.waves) {
@@ -268,7 +335,13 @@ function nextWave() {
 
 function spawnLevelZombie(type) {
   const lv = level();
-  const z = spawnZombie(type, canvas.width, canvas.height);
+  const g = game;
+  const z = spawnZombie(type, g.world.w, g.world.h);
+  // place on a ring just outside the camera view, clamped into the world
+  const a = Math.random() * Math.PI * 2;
+  const r = Math.max(canvas.width, canvas.height) * 0.62 + 100;
+  z.x = Math.max(30, Math.min(g.world.w - 30, g.player.x + Math.cos(a) * r));
+  z.y = Math.max(30, Math.min(g.world.h - 30, g.player.y + Math.sin(a) * r));
   z.hp = z.maxHp = Math.round(z.hp * lv.hpMult);
   z.speed *= lv.speedMult;
   z.damage = Math.round(z.damage * (1 + char.campaignLevel * 0.2));
@@ -282,10 +355,105 @@ function completeLevel() {
   char.totalKills += game.kills;
   saveCharacter(char);
   sfx.playFanfare();
+  gpFocus = 0;
   state = 'shop';
 }
 
-// ---- update ----------------------------------------------------------------
+// ---- gore --------------------------------------------------------------------
+
+function spawnBlood(x, y, n, color, dirAngle = null) {
+  for (let i = 0; i < n; i++) {
+    const a = dirAngle != null ? dirAngle + (Math.random() - 0.5) * 1.1 : Math.random() * Math.PI * 2;
+    const s = 60 + Math.random() * 260;
+    game.particles.push({
+      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+      life: 0.3 + Math.random() * 0.4, color,
+      size: 2 + Math.random() * 3,
+    });
+  }
+}
+
+function spawnGibs(x, y, n, dirAngle = null) {
+  const colors = ['#7b1d1d', '#5d1414', '#8e2a2a', '#4a3f3f'];
+  for (let i = 0; i < n; i++) {
+    const a = dirAngle != null ? dirAngle + (Math.random() - 0.5) * 1.6 : Math.random() * Math.PI * 2;
+    const s = 120 + Math.random() * 320;
+    game.gibs.push({
+      x, y,
+      vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+      rot: Math.random() * Math.PI * 2,
+      rotV: (Math.random() - 0.5) * 14,
+      size: 3 + Math.random() * 6,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      life: 0.45 + Math.random() * 0.5,
+    });
+  }
+}
+
+function stampDecal(x, y, r, heavy = false) {
+  decalCtx.fillStyle = heavy ? 'rgba(110, 10, 10, 0.7)' : 'rgba(90, 12, 12, 0.55)';
+  const blots = heavy ? 14 : 7;
+  for (let i = 0; i < blots; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = Math.random() * r * (heavy ? 2.2 : 1.4);
+    const s = 3 + Math.random() * r * 0.6;
+    decalCtx.beginPath();
+    decalCtx.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, s, 0, Math.PI * 2);
+    decalCtx.fill();
+  }
+}
+
+function addScreenBlood(intensity = 1) {
+  for (let i = 0; i < 2 + Math.round(Math.random() * 2 * intensity); i++) {
+    screenBlood.push({
+      fx: 0.1 + Math.random() * 0.8,
+      fy: 0.1 + Math.random() * 0.8,
+      r: 30 + Math.random() * 90 * intensity,
+      alpha: 0.5 + Math.random() * 0.3,
+    });
+  }
+}
+
+function goreKill(x, y, radius, dirAngle, big) {
+  sfx.playSquelch();
+  spawnBlood(x, y, big ? 50 : 22, '#7b1d1d', dirAngle);
+  spawnGibs(x, y, big ? 18 : 8, dirAngle);
+  stampDecal(x, y, radius, true);
+  const p = game.player;
+  if (Math.hypot(p.x - x, p.y - y) < 140) addScreenBlood(big ? 1.5 : 0.8);
+}
+
+// ---- update -------------------------------------------------------------------
+
+function ownedList() {
+  return WEAPON_ORDER.filter((w) => char.ownedWeapons.includes(w));
+}
+
+function cycleWeapon(dir) {
+  const owned = ownedList();
+  const p = game.player;
+  const i = owned.indexOf(p.weapon);
+  p.weapon = owned[(i + dir + owned.length) % owned.length];
+  p.reloading = 0;
+  p.fireCooldown = Math.max(p.fireCooldown, 0.15);
+}
+
+function zombieTarget(z) {
+  // nearest living thing: player, squad, civilians
+  const g = game;
+  let best = g.player;
+  let bestD = Math.hypot(g.player.x - z.x, g.player.y - z.y) * 0.92; // slight pull toward the player
+  for (const a of g.allies) {
+    if (a.down) continue;
+    const d = Math.hypot(a.x - z.x, a.y - z.y);
+    if (d < bestD) { best = a; bestD = d; }
+  }
+  for (const c of g.civilians) {
+    const d = Math.hypot(c.x - z.x, c.y - z.y);
+    if (d < bestD) { best = c; bestD = d; }
+  }
+  return { t: best, d: Math.hypot(best.x - z.x, best.y - z.y) };
+}
 
 function update(dt) {
   const g = game;
@@ -293,51 +461,65 @@ function update(dt) {
   const d = derived(char);
   g.time += dt;
 
-  // -- player movement
+  // -- player movement (keyboard + left stick)
   let dx = 0, dy = 0;
   if (input.keys.has('w')) dy -= 1;
   if (input.keys.has('s')) dy += 1;
   if (input.keys.has('a')) dx -= 1;
   if (input.keys.has('d')) dx += 1;
-  const sprinting = input.keys.has('shift') && (dx || dy) && p.stamina > 0;
+  dx += gamepad.moveX;
+  dy += gamepad.moveY;
+  const moving = Math.hypot(dx, dy) > 0.01;
+  const sprinting = (input.keys.has('shift') || gamepad.sprint) && moving && p.stamina > 0;
   if (sprinting) p.stamina = Math.max(0, p.stamina - dt / 2.5);
   else p.stamina = Math.min(1, p.stamina + dt / 4);
   const spd = p.speed * d.moveMult * (sprinting ? p.sprintMult : 1);
-  if (dx || dy) {
-    const len = Math.hypot(dx, dy);
+  if (moving) {
+    const len = Math.max(1, Math.hypot(dx, dy));
     p.x += (dx / len) * spd * dt;
     p.y += (dy / len) * spd * dt;
   }
-  p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x));
-  p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y));
-  p.angle = Math.atan2(input.mouse.y - p.y, input.mouse.x - p.x);
+  p.x = Math.max(p.radius, Math.min(g.world.w - p.radius, p.x));
+  p.y = Math.max(p.radius, Math.min(g.world.h - p.radius, p.y));
+
+  // -- aim: right stick wins, otherwise mouse (in world space)
+  if (gamepad.aiming) {
+    p.angle = Math.atan2(gamepad.aimY, gamepad.aimX);
+  } else {
+    p.angle = Math.atan2(input.mouse.y + cam.y - p.y, input.mouse.x + cam.x - p.x);
+  }
 
   // -- regen
   p.hp = Math.min(d.maxHp, p.hp + d.regen * dt);
 
-  // -- weapon switching
+  // -- weapon switching (1-6 if owned, LB/RB cycles)
   for (const w of WEAPON_ORDER) {
-    if (wasPressed(WEAPONS[w].key) && p.weapon !== w) {
+    if (wasPressed(WEAPONS[w].key) && p.weapon !== w && char.ownedWeapons.includes(w)) {
       p.weapon = w;
       p.reloading = 0;
       p.fireCooldown = Math.max(p.fireCooldown, 0.15);
     }
   }
+  if (gpPressed('lb')) cycleWeapon(-1);
+  if (gpPressed('rb')) cycleWeapon(1);
 
   // -- reload
   const ws = weaponStats(char, p.weapon);
   if (p.reloading > 0) {
     p.reloading -= dt;
     if (p.reloading <= 0) p.mags[p.weapon] = ws.magSize;
-  } else if (wasPressed('r') && p.mags[p.weapon] < ws.magSize) {
+  } else if ((wasPressed('r') || gpPressed('x')) && p.mags[p.weapon] < ws.magSize) {
     p.reloading = ws.reloadTime;
     sfx.playReload();
   }
 
-  // -- shooting
+  // -- shooting (mouse or RT)
   p.fireCooldown = Math.max(0, p.fireCooldown - dt);
   p.muzzleFlash = Math.max(0, p.muzzleFlash - dt);
-  const wantsFire = ws.auto ? input.mouse.down : wasPressed('mouse');
+  const holdFire = input.mouse.down || gamepad.fire;
+  const tapFire = wasPressed('mouse') || gpPressed('rt-tap'); // rt edge handled via holdFire for autos
+  const wantsFire = ws.auto ? holdFire : (tapFire || (gamepad.fire && p.fireCooldown === 0 && !p._rtHeld));
+  p._rtHeld = gamepad.fire;
   if (wantsFire && p.fireCooldown === 0 && p.reloading <= 0) {
     if (p.mags[p.weapon] <= 0) {
       sfx.playEmptyClick();
@@ -355,6 +537,7 @@ function update(dt) {
           vx: Math.cos(a) * ws.bulletSpeed,
           vy: Math.sin(a) * ws.bulletSpeed,
           damage: ws.damage, color: ws.color, life: 1.2,
+          pierce: ws.pierce ?? 1, hit: new Set(), friendly: false,
         });
       }
       if (p.mags[p.weapon] === 0) {
@@ -368,7 +551,7 @@ function update(dt) {
   const h = g.higgs;
   h.charge = Math.min(1, h.charge + dt / d.higgsCooldown);
   if (h.ringT >= 0) h.ringT += dt;
-  if (wasPressed('e') && h.charge >= 1) {
+  if ((wasPressed('e') || gpPressed('y')) && h.charge >= 1) {
     h.charge = 0;
     h.activeUntil = g.time + HIGGS.slowDuration;
     h.ringT = 0;
@@ -389,8 +572,12 @@ function update(dt) {
   if (g.spawnQueue.length) {
     g.spawnTimer -= dt;
     if (g.spawnTimer <= 0) {
-      g.zombies.push(spawnLevelZombie(g.spawnQueue.shift()));
-      g.spawnTimer = Math.max(0.25, 1.4 - (char.campaignLevel * 5 + g.wave) * 0.08);
+      // later waves dump zombies in pairs to keep the pressure up
+      const burst = 1 + (g.wave > 3 ? 1 : 0);
+      for (let i = 0; i < burst && g.spawnQueue.length; i++) {
+        g.zombies.push(spawnLevelZombie(g.spawnQueue.shift()));
+      }
+      g.spawnTimer = Math.max(0.22, 1.3 - (char.campaignLevel * lv.waves + g.wave) * 0.05);
     }
   } else if (!g.zombies.length) {
     if (g.wave >= lv.waves) {
@@ -412,30 +599,46 @@ function update(dt) {
   // -- zombies
   const fieldActive = g.time < h.activeUntil;
   for (const z of g.zombies) {
+    const { t: target, d: distT } = zombieTarget(z);
     const distP = Math.hypot(p.x - z.x, p.y - z.y);
     if (fieldActive && distP < HIGGS.radius + z.radius) z.slowUntil = g.time + 0.3;
     const slowed = g.time < z.slowUntil;
     const spdZ = z.speed * (slowed ? HIGGS.slowFactor : 1);
     z.wobble += dt * 5;
-    if (distP > 1) {
-      z.x += ((p.x - z.x) / distP) * spdZ * dt;
-      z.y += ((p.y - z.y) / distP) * spdZ * dt;
+    if (distT > 1) {
+      z.x += ((target.x - z.x) / distT) * spdZ * dt;
+      z.y += ((target.y - z.y) / distT) * spdZ * dt;
       z.x += Math.cos(z.wobble) * 8 * dt;
       z.y += Math.sin(z.wobble * 1.3) * 8 * dt;
     }
     z.attackCooldown -= dt;
-    if (distP < z.radius + p.radius + 4 && z.attackCooldown <= 0) {
+    if (distT < z.radius + (target.radius ?? 14) + 4 && z.attackCooldown <= 0) {
       z.attackCooldown = 0.8;
-      const dmg = Math.max(1, z.damage - d.armor);
-      p.hp -= dmg;
-      p.hurtFlash = 0.25;
-      spawnBlood(p.x, p.y, 6, '#c62828');
-      g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#ef5350', life: 0.8, vy: -50 });
+      if (target === p) {
+        const dmg = Math.max(1, z.damage - d.armor);
+        p.hp -= dmg;
+        p.hurtFlash = 0.25;
+        addScreenBlood(1);
+        spawnBlood(p.x, p.y, 8, '#c62828');
+        g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#ef5350', life: 0.8, vy: -50 });
+      } else if (g.allies.includes(target)) {
+        target.hp -= z.damage;
+        spawnBlood(target.x, target.y, 6, '#c62828');
+        if (target.hp <= 0 && !target.down) {
+          target.down = true;
+          banner(`${target.name} IS DOWN`, 'back up at the next wave', '#ef9a9a');
+          goreKill(target.x, target.y, target.radius, null, false);
+        }
+      } else {
+        // civilian mauled
+        target.hp -= z.damage;
+        if (target.hp <= 0) target.dead = true;
+      }
     }
     z.groanTimer -= dt;
     if (z.groanTimer <= 0) {
       z.groanTimer = 4 + Math.random() * 8;
-      sfx.playGroan(Math.min(1, distP / 900));
+      sfx.playGroan(Math.min(1, distP / 1100));
     }
     if (z.type === 'boss') {
       z.minionTimer -= dt;
@@ -449,32 +652,130 @@ function update(dt) {
     }
   }
 
+  // -- civilians: flee the nearest zombie, die horribly, rise again
+  for (const c of g.civilians) {
+    if (c.dead) continue;
+    c.wobble += dt * 6;
+    let nz = null, nd = 1e9;
+    for (const z of g.zombies) {
+      const dd = Math.hypot(z.x - c.x, z.y - c.y);
+      if (dd < nd) { nd = dd; nz = z; }
+    }
+    if (nz && nd < 480) {
+      c.angle = Math.atan2(c.y - nz.y, c.x - nz.x);
+      c.x += Math.cos(c.angle) * c.speed * dt;
+      c.y += Math.sin(c.angle) * c.speed * dt;
+      c.panicTimer -= dt;
+      if (c.panicTimer <= 0 && nd < 260) {
+        c.panicTimer = 2 + Math.random() * 3;
+        sfx.playScream();
+      }
+    } else {
+      // nervous wandering
+      c.angle += (Math.random() - 0.5) * dt * 3;
+      c.x += Math.cos(c.angle) * c.speed * 0.25 * dt;
+      c.y += Math.sin(c.angle) * c.speed * 0.25 * dt;
+    }
+    c.x = Math.max(c.radius, Math.min(g.world.w - c.radius, c.x));
+    c.y = Math.max(c.radius, Math.min(g.world.h - c.radius, c.y));
+  }
+  // the turned rise as walkers
+  for (const c of g.civilians) {
+    if (!c.dead) continue;
+    sfx.playScream();
+    goreKill(c.x, c.y, c.radius, null, false);
+    const z = spawnLevelZombie('walker');
+    z.x = c.x;
+    z.y = c.y;
+    g.zombies.push(z);
+    if (!g.infectionBannerShown) {
+      g.infectionBannerShown = true;
+      banner('THE INFECTION SPREADS', 'the dead do not stay down', '#9ccc65');
+    }
+  }
+  g.civilians = g.civilians.filter((c) => !c.dead);
+
+  // -- squad AI: stick near the player, light up the nearest zombie
+  for (const a of g.allies) {
+    if (a.down) continue;
+    const dp = Math.hypot(p.x - a.x, p.y - a.y);
+    if (dp > 170) {
+      a.x += ((p.x - a.x) / dp) * 200 * dt;
+      a.y += ((p.y - a.y) / dp) * 200 * dt;
+    }
+    let nz = null, nd = 1e9;
+    for (const z of g.zombies) {
+      const dd = Math.hypot(z.x - a.x, z.y - a.y);
+      if (dd < nd) { nd = dd; nz = z; }
+    }
+    a.fireCooldown -= dt;
+    if (nz && nd < a.range) {
+      a.angle = Math.atan2(nz.y - a.y, nz.x - a.x);
+      if (a.fireCooldown <= 0) {
+        a.fireCooldown = a.fireInterval;
+        sfx.playGunshot(a.type === 'commander' ? 'magnum' : 'rifle');
+        const sp = a.angle + (Math.random() - 0.5) * 0.08;
+        g.bullets.push({
+          x: a.x + Math.cos(a.angle) * 20, y: a.y + Math.sin(a.angle) * 20,
+          vx: Math.cos(sp) * 1200, vy: Math.sin(sp) * 1200,
+          damage: a.damage, color: a.color, life: 1.0,
+          pierce: a.type === 'commander' ? 2 : 1, hit: new Set(), friendly: true,
+        });
+      }
+    } else {
+      a.angle = p.angle;
+    }
+    // squad slowly patches itself up between fights
+    if (!nz || nd > 700) a.hp = Math.min(a.maxHp, a.hp + 4 * dt);
+  }
+
   // -- bullets
   for (const b of g.bullets) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
+    const dir = Math.atan2(b.vy, b.vx);
     for (const z of g.zombies) {
-      if (z.hp <= 0) continue;
+      if (z.hp <= 0 || b.hit.has(z)) continue;
       if (Math.hypot(z.x - b.x, z.y - b.y) < z.radius + 3) {
-        const crit = Math.random() < d.critChance;
+        const crit = !b.friendly && Math.random() < d.critChance;
         const dmg = Math.round(b.damage * (crit ? 2 : 1));
         z.hp -= dmg;
-        b.life = 0;
-        spawnBlood(b.x, b.y, 4, '#7b1d1d');
-        g.dmgNumbers.push({
-          x: z.x + (Math.random() - 0.5) * 16, y: z.y - z.radius,
-          txt: crit ? `${dmg}!` : `${dmg}`,
-          color: crit ? '#ffd740' : '#fff',
-          life: crit ? 1 : 0.7, vy: -60,
-        });
-        if (z.hp <= 0) killZombie(z);
-        break;
+        b.hit.add(z);
+        if (b.hit.size >= b.pierce) b.life = 0;
+        spawnBlood(b.x, b.y, 6, '#7b1d1d', dir);
+        if (!b.friendly) {
+          g.dmgNumbers.push({
+            x: z.x + (Math.random() - 0.5) * 16, y: z.y - z.radius,
+            txt: crit ? `${dmg}!` : `${dmg}`,
+            color: crit ? '#ffd740' : '#fff',
+            life: crit ? 1 : 0.7, vy: -60,
+          });
+        }
+        if (z.hp <= 0) killZombie(z, dir);
+        if (b.life <= 0) break;
+      }
+    }
+    // stray player fire can hit civilians — gore, no reward
+    if (!b.friendly && b.life > 0) {
+      for (const c of g.civilians) {
+        if (c.dead) continue;
+        if (Math.hypot(c.x - b.x, c.y - b.y) < c.radius + 3) {
+          c.hp -= b.damage;
+          b.life = 0;
+          spawnBlood(b.x, b.y, 6, '#c62828', dir);
+          if (c.hp <= 0) {
+            c.dead = true;
+            g.score = Math.max(0, g.score - 50);
+            g.dmgNumbers.push({ x: c.x, y: c.y - 16, txt: '-50 CIVILIAN', color: '#ef5350', life: 1.1, vy: -40 });
+          }
+          break;
+        }
       }
     }
   }
   g.bullets = g.bullets.filter(
-    (b) => b.life > 0 && b.x > -50 && b.x < canvas.width + 50 && b.y > -50 && b.y < canvas.height + 50
+    (b) => b.life > 0 && b.x > -50 && b.x < g.world.w + 50 && b.y > -50 && b.y < g.world.h + 50
   );
   g.zombies = g.zombies.filter((z) => z.hp > 0);
 
@@ -482,7 +783,6 @@ function update(dt) {
   for (const s of g.scraps) {
     const dist = Math.hypot(p.x - s.x, p.y - s.y);
     if (dist < 90) {
-      // magnet
       s.x += ((p.x - s.x) / dist) * 320 * dt;
       s.y += ((p.y - s.y) / dist) * 320 * dt;
     } else {
@@ -499,7 +799,7 @@ function update(dt) {
   }
   g.scraps = g.scraps.filter((s) => !s.taken);
 
-  // -- particles / damage numbers / banners
+  // -- particles / gibs / corpses / damage numbers
   for (const pa of g.particles) {
     pa.x += pa.vx * dt;
     pa.y += pa.vy * dt;
@@ -508,11 +808,28 @@ function update(dt) {
     pa.life -= dt;
   }
   g.particles = g.particles.filter((pa) => pa.life > 0);
+  for (const gb of g.gibs) {
+    gb.x += gb.vx * dt;
+    gb.y += gb.vy * dt;
+    gb.vx *= 0.88;
+    gb.vy *= 0.88;
+    gb.rot += gb.rotV * dt;
+    gb.life -= dt;
+    if (gb.life <= 0) {
+      decalCtx.fillStyle = 'rgba(80, 10, 10, 0.6)';
+      decalCtx.fillRect(gb.x - gb.size / 2, gb.y - gb.size / 2, gb.size, gb.size);
+    }
+  }
+  g.gibs = g.gibs.filter((gb) => gb.life > 0);
+  for (const co of g.corpses) co.t -= dt;
+  g.corpses = g.corpses.filter((co) => co.t > 0);
   for (const n of g.dmgNumbers) {
     n.y += n.vy * dt;
     n.life -= dt;
   }
   g.dmgNumbers = g.dmgNumbers.filter((n) => n.life > 0);
+  for (const sb of screenBlood) sb.alpha -= dt * 0.12;
+  screenBlood = screenBlood.filter((sb) => sb.alpha > 0.02);
 
   p.hurtFlash = Math.max(0, p.hurtFlash - dt);
 
@@ -528,14 +845,12 @@ function update(dt) {
 
 const SCRAP_DROPS = { walker: [3, 3], runner: [5, 3], brute: [12, 6], boss: [80, 40] };
 
-function killZombie(z) {
+function killZombie(z, dirAngle) {
   const g = game;
   g.score += z.score;
   g.kills++;
-  sfx.playSquelch();
-  spawnBlood(z.x, z.y, z.type === 'boss' ? 40 : 14, '#7b1d1d');
-  stampDecal(z.x, z.y, z.radius);
-  // scrap scatter
+  goreKill(z.x, z.y, z.radius, dirAngle, z.type === 'boss' || z.type === 'brute');
+  g.corpses.push({ x: z.x, y: z.y, angle: dirAngle ?? Math.random() * Math.PI * 2, type: z.type, radius: z.radius, t: 12 });
   const [base, rand] = SCRAP_DROPS[z.type];
   const total = base + Math.floor(Math.random() * rand);
   const piles = z.type === 'boss' ? 6 : 1 + Math.floor(Math.random() * 2);
@@ -547,7 +862,6 @@ function killZombie(z) {
       amount: Math.max(1, Math.round(total / piles)),
     });
   }
-  // xp
   const ups = grantXp(char, z.score);
   if (ups > 0) {
     sfx.playLevelUp();
@@ -555,31 +869,15 @@ function killZombie(z) {
   }
 }
 
-function spawnBlood(x, y, n, color) {
-  for (let i = 0; i < n; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const s = 60 + Math.random() * 220;
-    game.particles.push({
-      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
-      life: 0.3 + Math.random() * 0.4, color,
-      size: 2 + Math.random() * 3,
-    });
-  }
-}
+// ---- render: world -------------------------------------------------------------
 
-function stampDecal(x, y, r) {
-  decalCtx.fillStyle = 'rgba(90, 12, 12, 0.55)';
-  for (let i = 0; i < 7; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const d = Math.random() * r * 1.4;
-    const s = 3 + Math.random() * r * 0.5;
-    decalCtx.beginPath();
-    decalCtx.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, s, 0, Math.PI * 2);
-    decalCtx.fill();
-  }
+function updateCamera() {
+  const g = game;
+  cam.x = Math.max(0, Math.min(g.world.w - canvas.width, g.player.x - canvas.width / 2));
+  cam.y = Math.max(0, Math.min(g.world.h - canvas.height, g.player.y - canvas.height / 2));
+  if (g.world.w < canvas.width) cam.x = (g.world.w - canvas.width) / 2;
+  if (g.world.h < canvas.height) cam.y = (g.world.h - canvas.height) / 2;
 }
-
-// ---- render: world ---------------------------------------------------------
 
 function drawCoverImage(img, alpha = 1) {
   const s = Math.max(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
@@ -591,36 +889,45 @@ function drawCoverImage(img, alpha = 1) {
 }
 
 function drawGround() {
+  const g = game;
   ctx.fillStyle = '#0b0d0e';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const ground = getImage(level().ground);
+  const tile = 256;
   if (ground) {
     ctx.globalAlpha = 0.35;
-    const tile = 256;
-    for (let x = 0; x < canvas.width; x += tile)
-      for (let y = 0; y < canvas.height; y += tile)
+    const x0 = Math.floor(cam.x / tile) * tile;
+    const y0 = Math.floor(cam.y / tile) * tile;
+    for (let x = x0; x < cam.x + canvas.width; x += tile)
+      for (let y = y0; y < cam.y + canvas.height; y += tile)
         ctx.drawImage(ground, x, y, tile, tile);
     ctx.globalAlpha = 1;
-  } else {
-    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-    ctx.lineWidth = 1;
-    const grid = 64;
-    ctx.beginPath();
-    for (let x = 0; x < canvas.width; x += grid) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvas.height);
-    }
-    for (let y = 0; y < canvas.height; y += grid) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width, y);
-    }
-    ctx.stroke();
   }
+  // world boundary
+  ctx.strokeStyle = 'rgba(229,57,53,0.25)';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, g.world.w - 4, g.world.h - 4);
   ctx.drawImage(decalCanvas, 0, 0);
-  if (level().tint) {
-    ctx.fillStyle = level().tint;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function drawCorpse(co) {
+  ctx.save();
+  ctx.translate(co.x, co.y);
+  ctx.rotate(co.angle);
+  ctx.globalAlpha = Math.min(1, co.t / 2) * 0.8;
+  const sprite = SPRITES[co.type];
+  if (sprite) {
+    ctx.filter = 'brightness(0.4) saturate(0.6)';
+    drawSprite(sprite, co.radius * 3.0);
+    ctx.filter = 'none';
+  } else {
+    ctx.fillStyle = '#3e2723';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, co.radius, co.radius * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
+  ctx.restore();
+  ctx.globalAlpha = 1;
 }
 
 function drawZombie(z) {
@@ -634,10 +941,10 @@ function drawZombie(z) {
   ctx.beginPath();
   ctx.arc(0, 0, z.radius * 2.2, 0, Math.PI * 2);
   ctx.fill();
-  const a = Math.atan2(game.player.y - z.y, game.player.x - z.x);
+  const { t: target } = zombieTarget(z);
+  const a = Math.atan2(target.y - z.y, target.x - z.x);
   const sprite = SPRITES[z.type];
   if (sprite) {
-    // sprites face right; rotate toward the player with a walk-cycle bob
     ctx.save();
     ctx.rotate(a + Math.sin(z.wobble * 2) * 0.08);
     drawSprite(sprite, z.radius * 3.2);
@@ -647,16 +954,6 @@ function drawZombie(z) {
     ctx.beginPath();
     ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = z.color;
-    ctx.lineWidth = Math.max(3, z.radius * 0.25);
-    ctx.lineCap = 'round';
-    for (const off of [-0.5, 0.5]) {
-      const reach = z.radius * 1.5 + Math.sin(z.wobble * 2 + off) * z.radius * 0.3;
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(a + off) * z.radius * 0.7, Math.sin(a + off) * z.radius * 0.7);
-      ctx.lineTo(Math.cos(a + off * 0.4) * reach, Math.sin(a + off * 0.4) * reach);
-      ctx.stroke();
-    }
   }
   if (slowed) {
     ctx.strokeStyle = 'rgba(100,181,246,0.8)';
@@ -675,13 +972,69 @@ function drawZombie(z) {
   ctx.restore();
 }
 
+function drawCivilian(c) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(c.angle + Math.sin(c.wobble * 2) * 0.1);
+  const sprite = SPRITES[c.sprite];
+  if (sprite) drawSprite(sprite, c.radius * 3.0);
+  else {
+    ctx.fillStyle = '#ffe0b2';
+    ctx.beginPath();
+    ctx.arc(0, 0, c.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawAlly(a) {
+  ctx.save();
+  ctx.translate(a.x, a.y);
+  if (a.down) {
+    ctx.globalAlpha = 0.55;
+    ctx.rotate(0.6);
+    const sprite = SPRITES[a.type];
+    if (sprite) {
+      ctx.filter = 'brightness(0.5)';
+      drawSprite(sprite, a.radius * 3.2);
+      ctx.filter = 'none';
+    }
+    ctx.restore();
+    return;
+  }
+  ctx.rotate(a.angle);
+  const sprite = SPRITES[a.type];
+  if (sprite) drawSprite(sprite, a.radius * 3.4);
+  else {
+    ctx.fillStyle = a.color;
+    ctx.beginPath();
+    ctx.arc(0, 0, a.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  // name + health
+  ctx.save();
+  ctx.translate(a.x, a.y);
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = a.color;
+  ctx.fillText(a.name, 0, -a.radius - 16);
+  const w = a.radius * 2.2;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(-w / 2, -a.radius - 12, w, 3);
+  ctx.fillStyle = a.color;
+  ctx.fillRect(-w / 2, -a.radius - 12, (w * a.hp) / a.maxHp, 3);
+  ctx.restore();
+}
+
 function drawPlayer() {
   const p = game.player;
   ctx.save();
   ctx.translate(p.x, p.y);
   ctx.rotate(p.angle);
-  if (SPRITES.player) {
-    drawSprite(SPRITES.player, p.radius * 3.6);
+  const sprite = SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
+  if (sprite) {
+    drawSprite(sprite, p.radius * 3.6);
   } else {
     ctx.fillStyle = '#cfd8dc';
     ctx.beginPath();
@@ -749,7 +1102,7 @@ function drawScraps() {
   }
 }
 
-// ---- render: HUD + screens ---------------------------------------------------
+// ---- render: HUD + screens -------------------------------------------------------
 
 function drawBanners(dt) {
   for (const b of banners) {
@@ -763,7 +1116,7 @@ function drawBanners(dt) {
     ctx.translate(canvas.width / 2, canvas.height / 2 - 80);
     ctx.scale(scale, scale);
     ctx.globalAlpha = alpha;
-    ctx.font = 'bold 64px monospace';
+    ctx.font = 'bold 58px monospace';
     ctx.fillStyle = b.color;
     ctx.shadowColor = b.color;
     ctx.shadowBlur = 30;
@@ -779,6 +1132,62 @@ function drawBanners(dt) {
   banners = banners.filter((b) => b.t > 0);
 }
 
+function drawScreenBlood() {
+  const p = game.player;
+  const d = derived(char);
+  for (const sb of screenBlood) {
+    const x = sb.fx * canvas.width;
+    const y = sb.fy * canvas.height;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, sb.r);
+    grad.addColorStop(0, `rgba(140,10,10,${sb.alpha})`);
+    grad.addColorStop(0.6, `rgba(120,8,8,${sb.alpha * 0.5})`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x - sb.r, y - sb.r, sb.r * 2, sb.r * 2);
+  }
+  // low-HP pulsing red frame
+  const frac = p.hp / d.maxHp;
+  if (frac < 0.4) {
+    const pulse = (0.4 - frac) * (1.4 + Math.sin(performance.now() / 180) * 0.5);
+    const grad = ctx.createRadialGradient(
+      canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) * 0.3,
+      canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) * 0.7
+    );
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, `rgba(150,0,0,${Math.min(0.7, pulse)})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  if (p.hurtFlash > 0) {
+    ctx.fillStyle = `rgba(183,28,28,${p.hurtFlash * 0.8})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function drawMinimap() {
+  const g = game;
+  const mw = 170, mh = Math.round(170 * (g.world.h / g.world.w));
+  const mx = canvas.width - mw - 20, my = 40;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(mx, my, mw, mh);
+  ctx.strokeStyle = '#37474f';
+  ctx.strokeRect(mx, my, mw, mh);
+  const sx = mw / g.world.w, sy = mh / g.world.h;
+  const dot = (x, y, color, r = 2) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(mx + x * sx - r / 2, my + y * sy - r / 2, r, r);
+  };
+  for (const c of g.civilians) dot(c.x, c.y, '#ffe082');
+  for (const a of g.allies) if (!a.down) dot(a.x, a.y, a.color, 3);
+  for (const z of g.zombies) dot(z.x, z.y, z.type === 'boss' ? '#e040fb' : '#ef5350', z.type === 'boss' ? 4 : 2);
+  dot(g.player.x, g.player.y, '#fff', 4);
+  // camera view rect
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.strokeRect(mx + cam.x * sx, my + cam.y * sy, canvas.width * sx, canvas.height * sy);
+  ctx.restore();
+}
+
 function drawHUD() {
   const p = game.player;
   const d = derived(char);
@@ -788,7 +1197,6 @@ function drawHUD() {
   ctx.font = '14px monospace';
   ctx.textBaseline = 'top';
 
-  // health
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(20, 20, 220, 18);
   ctx.fillStyle = p.hp > d.maxHp * 0.3 ? '#66bb6a' : '#ef5350';
@@ -796,21 +1204,18 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.fillText(`HP ${Math.max(0, Math.ceil(p.hp))}/${d.maxHp}`, 26, 22);
 
-  // stamina
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(20, 44, 220, 8);
   ctx.fillStyle = '#ffee58';
   ctx.fillRect(20, 44, 220 * p.stamina, 8);
 
-  // higgs charge
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(20, 58, 220, 10);
   ctx.fillStyle = game.higgs.charge >= 1 ? '#42a5f5' : '#1e5a8a';
   ctx.fillRect(20, 58, 220 * game.higgs.charge, 10);
   ctx.fillStyle = '#bbdefb';
-  ctx.fillText(game.higgs.charge >= 1 ? 'HIGGS FIELD READY [E]' : 'HIGGS CHARGING…', 20, 72);
+  ctx.fillText(game.higgs.charge >= 1 ? 'HIGGS FIELD READY [E/Ⓨ]' : 'HIGGS CHARGING…', 20, 72);
 
-  // xp bar + char level
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(20, 94, 220, 10);
   ctx.fillStyle = '#ab47bc';
@@ -818,13 +1223,19 @@ function drawHUD() {
   ctx.fillStyle = '#ce93d8';
   ctx.fillText(`LV ${char.level}` + (char.unspent > 0 ? `  +${char.unspent} pts [TAB]` : ''), 20, 108);
 
-  // scrap
+  // squad readout
+  let sy = 132;
+  for (const a of game.allies) {
+    ctx.fillStyle = a.down ? '#616161' : a.color;
+    ctx.fillText(`${a.name} ${a.down ? 'DOWN' : Math.ceil(a.hp)}`, 20, sy);
+    sy += 18;
+  }
+
   ctx.fillStyle = '#ffb300';
   ctx.font = 'bold 16px monospace';
   ctx.textAlign = 'right';
   ctx.fillText(`⚙ ${char.scrap}`, canvas.width - 24, 22);
 
-  // weapon + ammo
   ctx.font = 'bold 22px monospace';
   ctx.fillStyle = '#fff';
   const ammoTxt = p.reloading > 0 ? 'RELOADING…' : `${p.mags[p.weapon]} / ${ws.magSize}`;
@@ -832,30 +1243,31 @@ function drawHUD() {
   ctx.fillText(`${ws.name}${tierTxt}  ${ammoTxt}`, canvas.width - 24, canvas.height - 70);
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
-  ctx.fillText('[1]PISTOL [2]RIFLE [3]SHOTGUN [4]SMG  [R]RELOAD  [TAB]CHARACTER', canvas.width - 24, canvas.height - 40);
+  const keys = ownedList().map((w) => `[${WEAPONS[w].key}]${WEAPONS[w].name}`).join(' ');
+  ctx.fillText(`${keys}  [R]RELOAD [TAB]CHAR`, canvas.width - 24, canvas.height - 40);
+  if (gamepad.connected) {
+    ctx.fillStyle = '#80cbc4';
+    ctx.fillText('🎮 controller connected — LS move · RS aim · RT fire · LB/RB weapons · Ⓧ reload · Ⓨ higgs', canvas.width - 24, canvas.height - 22);
+  }
 
-  // wave + score + level name
   ctx.textAlign = 'center';
   ctx.font = 'bold 18px monospace';
   ctx.fillStyle = '#ef9a9a';
   ctx.fillText(`${lv.name} — WAVE ${game.wave}/${lv.waves}`, canvas.width / 2, 22);
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
-  ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}`, canvas.width / 2, 46);
-
-  // hurt vignette
-  if (p.hurtFlash > 0) {
-    ctx.fillStyle = `rgba(183,28,28,${p.hurtFlash * 0.8})`;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  }
+  ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, canvas.width / 2, 46);
   ctx.restore();
+  drawMinimap();
 }
 
 function drawPanelButton(x, y, w, h, label, sub, cost, enabled, cb) {
+  const idx = uiButtons.length;
+  const focused = gamepad.connected && idx === gpFocus;
   ctx.fillStyle = enabled ? 'rgba(30,34,40,0.92)' : 'rgba(20,22,25,0.92)';
   ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = enabled ? '#546e7a' : '#37474f';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = focused ? '#ffd54f' : enabled ? '#546e7a' : '#37474f';
+  ctx.lineWidth = focused ? 2 : 1;
   ctx.strokeRect(x, y, w, h);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
@@ -909,8 +1321,15 @@ function drawCharSheet() {
     ctx.fillText(a.desc, x + 24, yy + 28);
     const canAdd = char.unspent > 0;
     const bx = x + w - 70;
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
     ctx.fillStyle = canAdd ? '#2e7d32' : '#1b3a1d';
     ctx.fillRect(bx, yy, 46, 40);
+    if (focused) {
+      ctx.strokeStyle = '#ffd54f';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx, yy, 46, 40);
+    }
     ctx.font = 'bold 24px monospace';
     ctx.fillStyle = canAdd ? '#fff' : '#4a4a4a';
     ctx.fillText('+', bx + 16, yy + 7);
@@ -932,7 +1351,7 @@ function drawCharSheet() {
     x + 24, yy + 6
   );
   ctx.fillStyle = '#9e9e9e';
-  ctx.fillText('[TAB] close', x + 24, y + h - 28);
+  ctx.fillText('[TAB/Ⓑ] close', x + 24, y + h - 28);
 }
 
 function drawShop() {
@@ -944,22 +1363,22 @@ function drawShop() {
   const cx = canvas.width / 2;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.font = 'bold 44px monospace';
+  ctx.font = 'bold 40px monospace';
   ctx.fillStyle = '#ffd54f';
   ctx.shadowColor = '#ffd54f';
   ctx.shadowBlur = 18;
-  ctx.fillText(`${level().name} CLEARED`, cx, 48);
+  ctx.fillText(`${level().name} CLEARED`, cx, 36);
   ctx.shadowBlur = 0;
-  ctx.font = '16px monospace';
+  ctx.font = '15px monospace';
   ctx.fillStyle = '#e0e0e0';
-  ctx.fillText(`REQUISITIONS — spend scrap before deploying    ⚙ ${char.scrap}`, cx, 104);
+  ctx.fillText(`REQUISITIONS — spend scrap before deploying    ⚙ ${char.scrap}`, cx, 88);
 
   const items = shopCatalog(char, char.hp ?? 0);
-  const colW = 380, rowH = 58, gap = 14;
+  const colW = 380, rowH = 56, gap = 11;
   const cols = canvas.width > 860 ? 2 : 1;
   const gridW = cols * colW + (cols - 1) * gap;
   const x0 = (canvas.width - gridW) / 2;
-  const y0 = 150;
+  const y0 = 122;
   items.forEach((item, i) => {
     const cxx = x0 + (i % cols) * (colW + gap);
     const cyy = y0 + Math.floor(i / cols) * (rowH + gap);
@@ -982,12 +1401,15 @@ function drawShop() {
   });
 
   const lastLevel = char.campaignLevel >= LEVELS.length - 1;
-  const deployY = y0 + Math.ceil(items.length / cols) * (rowH + gap) + 24;
+  const deployY = y0 + Math.ceil(items.length / cols) * (rowH + gap) + 18;
   const dw = 420;
+  const idx = uiButtons.length;
+  const focused = gamepad.connected && idx === gpFocus;
   ctx.font = 'bold 20px monospace';
   ctx.fillStyle = '#102316';
   ctx.fillRect(cx - dw / 2, deployY, dw, 54);
-  ctx.strokeStyle = '#43a047';
+  ctx.strokeStyle = focused ? '#ffd54f' : '#43a047';
+  ctx.lineWidth = focused ? 3 : 1;
   ctx.strokeRect(cx - dw / 2, deployY, dw, 54);
   ctx.fillStyle = '#a5d6a7';
   ctx.textAlign = 'center';
@@ -1006,7 +1428,65 @@ function drawShop() {
 
   ctx.font = '13px monospace';
   ctx.fillStyle = '#9e9e9e';
-  ctx.fillText('[TAB] character sheet — spend attribute points', cx, deployY + 70);
+  ctx.fillText('[TAB] character sheet — 🎮 d-pad to browse, Ⓐ to buy', cx, deployY + 66);
+}
+
+function drawCharSelect() {
+  ctx.fillStyle = '#08090b';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (titleArt.complete && titleArt.naturalWidth) drawCoverImage(titleArt, 0.22);
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 36px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = '#d32f2f';
+  ctx.shadowBlur = 18;
+  ctx.fillText('CHOOSE YOUR SURVIVOR', cx, cy - 220);
+  ctx.shadowBlur = 0;
+
+  const cards = [
+    { g: 'm', label: 'JACK "HAVOC" MILLER', sub: 'ex-SWAT · starts with the rifle drilled in', sprite: 'player' },
+    { g: 'f', label: 'MAYA "GHOST" REYES', sub: 'urban scout · the SMG sings for her', sprite: 'player_f' },
+  ];
+  const cw = 280, chh = 300, gap = 60;
+  cards.forEach((card, i) => {
+    const x = cx - cw - gap / 2 + i * (cw + gap);
+    const y = cy - 160;
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
+    ctx.fillStyle = 'rgba(20,24,30,0.92)';
+    ctx.fillRect(x, y, cw, chh);
+    ctx.strokeStyle = focused ? '#ffd54f' : '#546e7a';
+    ctx.lineWidth = focused ? 3 : 1;
+    ctx.strokeRect(x, y, cw, chh);
+    const sprite = SPRITES[card.sprite];
+    if (sprite) {
+      ctx.save();
+      ctx.translate(x + cw / 2, y + 130);
+      ctx.rotate(-Math.PI / 2);
+      drawSprite(sprite, 170);
+      ctx.restore();
+    }
+    ctx.font = 'bold 15px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText(card.label, x + cw / 2, y + chh - 60);
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#90a4ae';
+    ctx.fillText(card.sub, x + cw / 2, y + chh - 36);
+    button(x, y, cw, chh, () => {
+      char.gender = card.g;
+      saveCharacter(char);
+      startCutscene(OPENING_SHOTS, enterLevelIntro);
+    });
+  });
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#9e9e9e';
+  ctx.fillText('click a survivor — 🎮 d-pad + Ⓐ', cx, cy + 170);
+  ctx.restore();
 }
 
 // total characters of story revealed so far (typewriter at 45 chars/s)
@@ -1043,7 +1523,6 @@ function drawLevelIntro() {
   ctx.fillText(lv.name, cx, canvas.height - panelH + 38);
   ctx.shadowBlur = 0;
 
-  // story briefing, typewriter-revealed line by line
   let budget = briefingChars();
   let yy = canvas.height - panelH + 98;
   ctx.font = '15px monospace';
@@ -1076,14 +1555,12 @@ function drawTitle() {
   const t = performance.now() / 1000;
 
   if (titleArt.complete && titleArt.naturalWidth) {
-    // slow Ken Burns breathing zoom
     const zoom = 1.06 + Math.sin(t * 0.15) * 0.05;
     const s = Math.max(canvas.width / titleArt.naturalWidth, canvas.height / titleArt.naturalHeight) * zoom;
     const w = titleArt.naturalWidth * s;
     const h = titleArt.naturalHeight * s;
     ctx.drawImage(titleArt, (canvas.width - w) / 2 + Math.sin(t * 0.1) * 18, (canvas.height - h) / 2, w, h);
 
-    // drifting fog
     for (let i = 0; i < 5; i++) {
       const fx = ((t * 18 + i * 419) % (canvas.width + 500)) - 250;
       const fy = cy + Math.sin(t * 0.2 + i * 2.1) * canvas.height * 0.3;
@@ -1094,14 +1571,12 @@ function drawTitle() {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
-    // occasional red emergency flicker
     const flicker = Math.sin(t * 1.7) > 0.96 ? 0.08 : 0;
     if (flicker) {
       ctx.fillStyle = `rgba(255,23,68,${flicker})`;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
-    // zombie silhouettes shambling across the bottom
     if (SPRITES.walker) {
       ctx.save();
       ctx.filter = 'brightness(0)';
@@ -1128,7 +1603,7 @@ function drawTitle() {
     ctx.textBaseline = 'top';
     ctx.font = '15px monospace';
     ctx.fillStyle = '#cfcfcf';
-    ctx.fillText('WASD move · SHIFT sprint · MOUSE aim/shoot · 1-4 weapons · R reload · E higgs field · TAB character', cx, canvas.height - 140);
+    ctx.fillText('WASD/LS move · mouse/RS aim · 1-6 weapons · R reload · E higgs · TAB character · 🎮 Xbox supported', cx, canvas.height - 140);
     ctx.font = 'bold 24px monospace';
     ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.4 * Math.sin(t * 3)})`;
     ctx.fillText(hasSave ? `CLICK TO CONTINUE — LV ${char.level}, ${level().name}` : 'CLICK TO ENTER', cx, canvas.height - 100);
@@ -1213,13 +1688,14 @@ function drawVictory() {
   ctx.restore();
 }
 
-// ---- render dispatch -------------------------------------------------------
+// ---- render dispatch -----------------------------------------------------------
 
 let lastFrame = performance.now();
 
 function render(dt) {
   uiButtons = [];
   if (state === 'title') return drawTitle();
+  if (state === 'charselect') return drawCharSelect();
   if (state === 'cutscene') return drawCutscene(dt);
   if (state === 'levelintro') return drawLevelIntro();
   if (state === 'victory') return drawVictory();
@@ -1232,9 +1708,15 @@ function render(dt) {
     return;
   }
 
+  updateCamera();
+  ctx.save();
+  ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
   drawGround();
+  for (const co of game.corpses) drawCorpse(co);
   drawHiggs();
   drawScraps();
+  for (const c of game.civilians) drawCivilian(c);
+  for (const a of game.allies) drawAlly(a);
   for (const z of game.zombies) drawZombie(z);
   for (const b of game.bullets) {
     ctx.strokeStyle = b.color;
@@ -1245,6 +1727,14 @@ function render(dt) {
     ctx.stroke();
   }
   drawPlayer();
+  for (const gb of game.gibs) {
+    ctx.save();
+    ctx.translate(gb.x, gb.y);
+    ctx.rotate(gb.rot);
+    ctx.fillStyle = gb.color;
+    ctx.fillRect(-gb.size / 2, -gb.size / 2, gb.size, gb.size);
+    ctx.restore();
+  }
   for (const pa of game.particles) {
     ctx.globalAlpha = Math.min(1, pa.life * 3);
     ctx.fillStyle = pa.color;
@@ -1259,6 +1749,14 @@ function render(dt) {
     ctx.fillText(n.txt, n.x, n.y);
   }
   ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // screen-space layers
+  if (level().tint) {
+    ctx.fillStyle = level().tint;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  drawScreenBlood();
   drawHUD();
   drawBanners(dt);
   if (charSheetOpen) {
@@ -1268,11 +1766,10 @@ function render(dt) {
   if (state === 'gameover') drawGameOver();
 }
 
-// ---- main loop ---------------------------------------------------------------
+// ---- main loop --------------------------------------------------------------------
 
 function handleClicks() {
   if (!wasPressed('mouse')) return false;
-  // later-drawn buttons sit on top, so test them first
   for (let i = uiButtons.length - 1; i >= 0; i--) {
     const b = uiButtons[i];
     const m = input.mouse;
@@ -1287,10 +1784,24 @@ function handleClicks() {
 function frame(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
+  pollGamepad();
 
-  // UI clicks run against the buttons laid out last frame; a consumed click
-  // must not leak into the state machine below (e.g. DEPLOY → instant start)
-  const uiClicked = (charSheetOpen || state === 'shop') && handleClicks();
+  // gamepad UI focus: d-pad browses buttons laid out last frame, A activates
+  const uiState = charSheetOpen || state === 'shop' || state === 'charselect';
+  if (uiState && uiButtons.length) {
+    if (gpPressed('down') || gpPressed('right')) gpFocus = (gpFocus + 1) % uiButtons.length;
+    if (gpPressed('up') || gpPressed('left')) gpFocus = (gpFocus - 1 + uiButtons.length) % uiButtons.length;
+    if (gpPressed('a')) {
+      gpFocus = Math.min(gpFocus, uiButtons.length - 1);
+      uiButtons[gpFocus]?.cb();
+    }
+  } else if (gpPressed('a')) {
+    // A doubles as "click" on passive screens
+    input.pressed.add('mouse');
+  }
+  if (gpPressed('b') && charSheetOpen) charSheetOpen = false;
+
+  const uiClicked = uiState && handleClicks();
   if (uiClicked) input.pressed.delete('mouse');
 
   if (state === 'title') {
@@ -1301,7 +1812,6 @@ function frame(now) {
     }
     if (wasPressed('mouse')) {
       sfx.startMusic();
-      // ?debug=shop|victory jumps straight to that screen (dev aid)
       const dbg = new URLSearchParams(location.search).get('debug');
       if (dbg === 'shop') {
         game = newGame();
@@ -1309,10 +1819,10 @@ function frame(now) {
       } else if (dbg === 'victory') {
         state = 'victory';
       } else if (!char.seenIntro) {
-        // first ever start: play the opening cinematic
         char.seenIntro = true;
         saveCharacter(char);
-        startCutscene(OPENING_SHOTS, enterLevelIntro);
+        gpFocus = 0;
+        state = 'charselect';
       } else {
         enterLevelIntro();
       }
@@ -1321,15 +1831,14 @@ function frame(now) {
     if (wasPressed('mouse')) advanceCutscene();
   } else if (state === 'levelintro') {
     if (wasPressed('mouse')) {
-      // first click fast-forwards the briefing, the next one deploys
       if (briefingChars() < briefingTotal()) briefingStart = -1e9;
       else startLevel();
     }
   } else if (state === 'playing') {
-    if (wasPressed('tab')) charSheetOpen = !charSheetOpen;
+    if (wasPressed('tab') || gpPressed('start')) charSheetOpen = !charSheetOpen;
     if (!charSheetOpen) update(dt); // char sheet pauses the game
   } else if (state === 'shop') {
-    if (wasPressed('tab')) charSheetOpen = !charSheetOpen;
+    if (wasPressed('tab') || gpPressed('start')) charSheetOpen = !charSheetOpen;
   } else if (state === 'gameover') {
     if (wasPressed('mouse')) enterLevelIntro();
   } else if (state === 'victory') {
@@ -1341,6 +1850,7 @@ function frame(now) {
       state = 'title';
     }
   }
+
   render(dt);
   consumePressed();
   requestAnimationFrame(frame);
