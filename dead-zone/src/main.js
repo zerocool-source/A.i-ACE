@@ -371,10 +371,10 @@ function squadBanter() {
 }
 
 const ALLY_DEFS = {
-  soldier: { name: 'SGT. REYES', hp: 160, damage: 26, fireInterval: 0.22, range: 620, color: '#81c784' },
-  medic: { name: 'DOC OKAFOR', hp: 140, damage: 18, fireInterval: 0.5, range: 420, color: '#f8bbd0', healAura: 220, healRate: 4 },
-  commander: { name: 'CDR. HALE', hp: 220, damage: 60, fireInterval: 0.6, range: 700, color: '#ffcc80' },
-  demo: { name: '"BOOM" OSORIO', hp: 200, damage: 20, fireInterval: 0.45, range: 520, color: '#ffab40', grenade: { interval: 4.5, radius: 95, damage: 130 } },
+  soldier: { name: 'SGT. REYES', hp: 160, damage: 26, fireInterval: 0.22, range: 620, color: '#81c784', mag: 30, reloadTime: 2.2 },
+  medic: { name: 'DOC OKAFOR', hp: 140, damage: 18, fireInterval: 0.5, range: 420, color: '#f8bbd0', healAura: 220, healRate: 4, mag: 12, reloadTime: 1.8 },
+  commander: { name: 'CDR. HALE', hp: 220, damage: 60, fireInterval: 0.6, range: 700, color: '#ffcc80', mag: 6, reloadTime: 2.4 },
+  demo: { name: '"BOOM" OSORIO', hp: 200, damage: 20, fireInterval: 0.45, range: 520, color: '#ffab40', grenade: { interval: 4.5, radius: 95, damage: 130 }, mag: 10, reloadTime: 2.0 },
 };
 const SQUAD_JOIN = ['soldier', 'medic', 'commander', 'demo']; // index = level completed
 
@@ -428,6 +428,8 @@ function newGame() {
     props: placeProps(lv, world),
     caches: [],
     rogueBannerShown: false,
+    frenzyTimer: 23,
+    frenzyUntil: 0,
   };
   // hidden supply caches tucked far from the spawn — explore to find them
   for (let i = 0; i < 3; i++) {
@@ -467,6 +469,7 @@ function newGame() {
     partner.hp = partner.maxHp = 180;
     partner.damage = 24;
     partner.fireInterval = 0.26;
+    partner.mag = partner.magSize = 24;
     partner.color = '#b39ddb';
     g.allies.push(partner);
   }
@@ -489,6 +492,7 @@ function makeAlly(type, world) {
     color: def.color,
     healAura: def.healAura, healRate: def.healRate,
     grenade: def.grenade, grenadeTimer: def.grenade ? def.grenade.interval : 0,
+    mag: def.mag, magSize: def.mag, reloadTime: def.reloadTime, reloading: 0,
     reviveTimer: 0,
     down: false,
   };
@@ -947,6 +951,19 @@ function update(dt) {
     }
   }
 
+  // -- FRENZY: every 23 seconds the entire horde surges at 3x speed
+  if (g.zombies.length) {
+    g.frenzyTimer -= dt;
+    if (g.frenzyTimer <= 0) {
+      g.frenzyTimer = 23;
+      g.frenzyUntil = g.time + 4;
+      banner('FRENZY', 'THE HORDE SURGES — RUN', '#ff1744');
+      sfx.playScream();
+      sfx.playHiggsWhomp();
+    }
+  }
+  const frenzy = g.time < g.frenzyUntil;
+
   // -- zombies
   const fieldActive = g.time < h.activeUntil;
   for (const z of g.zombies) {
@@ -957,6 +974,7 @@ function update(dt) {
     let spdZ = z.speed * (slowed ? HIGGS.slowFactor : 1);
     if (z.lunges && distT < 160) spdZ *= 1.8; // crawler pounce
     if (g.time < z.boostUntil) spdZ *= 1.5; // screamer haste
+    if (frenzy && !z.human) spdZ *= 3; // FRENZY surge
     z.wobble += dt * 5;
     z.flash = Math.max(0, z.flash - dt);
     const holdPosition = z.ranged && distT < z.ranged.range * 0.85;
@@ -1152,18 +1170,28 @@ function update(dt) {
       if (dd < nd) { nd = dd; nz = z; }
     }
     a.fireCooldown -= dt;
+    // squad guns run dry and need reloading, just like yours
+    if (a.reloading > 0) {
+      a.reloading -= dt;
+      if (a.reloading <= 0) a.mag = a.magSize;
+    }
     if (nz && nd < a.range) {
       a.angle = Math.atan2(nz.y - a.y, nz.x - a.x);
-      if (a.fireCooldown <= 0) {
-        a.fireCooldown = a.fireInterval;
-        sfx.playGunshot(a.type === 'commander' ? 'magnum' : 'rifle');
-        const sp = a.angle + (Math.random() - 0.5) * 0.08;
-        g.bullets.push({
-          x: a.x + Math.cos(a.angle) * 20, y: a.y + Math.sin(a.angle) * 20,
-          vx: Math.cos(sp) * 1200, vy: Math.sin(sp) * 1200,
-          damage: a.damage, color: a.color, life: 1.0,
-          pierce: a.type === 'commander' ? 2 : 1, hit: new Set(), friendly: true,
-        });
+      if (a.fireCooldown <= 0 && a.reloading <= 0) {
+        if (a.mag <= 0) {
+          a.reloading = a.reloadTime;
+        } else {
+          a.mag--;
+          a.fireCooldown = a.fireInterval;
+          sfx.playGunshot(a.type === 'commander' ? 'magnum' : 'rifle');
+          const sp = a.angle + (Math.random() - 0.5) * 0.08;
+          g.bullets.push({
+            x: a.x + Math.cos(a.angle) * 20, y: a.y + Math.sin(a.angle) * 20,
+            vx: Math.cos(sp) * 1200, vy: Math.sin(sp) * 1200,
+            damage: a.damage, color: a.color, life: 1.0,
+            pierce: a.type === 'commander' ? 2 : 1, hit: new Set(), friendly: true,
+          });
+        }
       }
     } else {
       a.angle = p.angle;
@@ -1737,7 +1765,7 @@ function drawAlly(a) {
   ctx.font = '10px monospace';
   ctx.textAlign = 'center';
   ctx.fillStyle = a.color;
-  ctx.fillText(a.name, 0, -a.radius - 16);
+  ctx.fillText(a.reloading > 0 ? `${a.name} ⟳` : a.name, 0, -a.radius - 16);
   const w = a.radius * 2.2;
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(-w / 2, -a.radius - 12, w, 3);
@@ -2032,6 +2060,16 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
   ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, canvas.width / 2, 46);
+  // frenzy warning
+  if (game.time < game.frenzyUntil) {
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = Math.floor(performance.now() / 150) % 2 ? '#ff1744' : '#fff';
+    ctx.fillText('⚠ FRENZY ⚠', canvas.width / 2, 68);
+  } else if (game.frenzyTimer < 6 && game.zombies.length) {
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#ff8a80';
+    ctx.fillText(`FRENZY IN ${Math.ceil(game.frenzyTimer)}`, canvas.width / 2, 68);
+  }
   // squad radio chatter, bottom-left
   ctx.textAlign = 'left';
   ctx.font = '13px monospace';
@@ -2203,6 +2241,7 @@ function drawShop() {
   ctx.fillText(lastLevel ? 'FINISH THE CAMPAIGN ▶' : `DEPLOY: ${LEVELS[char.campaignLevel + 1].name} ▶`, cx, deployY + 16);
   button(cx - dw / 2, deployY, dw, 54, () => {
     char.campaignLevel++;
+    char.maxCampaign = Math.max(char.maxCampaign || 0, char.campaignLevel);
     char.hp = Math.min(char.hp ?? derived(char).maxHp, derived(char).maxHp);
     saveCharacter(char);
     if (char.campaignLevel >= LEVELS.length) {
@@ -2223,8 +2262,101 @@ function drawShop() {
 }
 
 let selectMode = 'hero'; // 'hero' picks the player, 'partner' picks the companion
+let reSelecting = false; // changing survivor from the menu skips the cinematic
+
+function drawLevelSelect() {
+  ctx.fillStyle = '#08090b';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (titleArt.complete && titleArt.naturalWidth) drawCoverImage(titleArt, 0.15);
+  const cx = canvas.width / 2;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 32px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = '#d32f2f';
+  ctx.shadowBlur = 18;
+  ctx.fillText('SELECT DEPLOYMENT', cx, 28);
+  ctx.shadowBlur = 0;
+
+  const n = LEVELS.length;
+  const gap = 14;
+  const cw = Math.min(230, (canvas.width - 70 - gap * (n - 1)) / n);
+  const chh = Math.min(300, canvas.height - 240);
+  const x0 = (canvas.width - (n * cw + (n - 1) * gap)) / 2;
+  const y0 = 86;
+  LEVELS.forEach((lv, i) => {
+    const unlocked = i <= (char.maxCampaign || 0);
+    const x = x0 + i * (cw + gap);
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y0, cw, chh);
+    ctx.clip();
+    const art = getImage(lv.intro);
+    if (art) {
+      const s = Math.max(cw / art.naturalWidth, chh / art.naturalHeight);
+      ctx.globalAlpha = unlocked ? 1 : 0.25;
+      ctx.drawImage(art, x + cw / 2 - (art.naturalWidth * s) / 2, y0 + chh / 2 - (art.naturalHeight * s) / 2, art.naturalWidth * s, art.naturalHeight * s);
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(x, y0 + chh - 74, cw, 74);
+    ctx.restore();
+    ctx.strokeStyle = focused ? '#ffd54f' : unlocked ? '#546e7a' : '#2c343c';
+    ctx.lineWidth = focused ? 3 : 1;
+    ctx.strokeRect(x, y0, cw, chh);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillStyle = unlocked ? '#fff' : '#546e7a';
+    ctx.fillText(`LEVEL ${i + 1}`, x + cw / 2, y0 + chh - 64);
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText(unlocked ? lv.name : '🔒 LOCKED', x + cw / 2, y0 + chh - 47, cw - 10);
+    ctx.font = '10px monospace';
+    ctx.fillStyle = '#90a4ae';
+    if (unlocked) ctx.fillText(`${lv.waves} waves · ${lv.bosses} boss${lv.bosses > 1 ? 'es' : ''} · 3 secrets`, x + cw / 2, y0 + chh - 28, cw - 10);
+    button(x, y0, cw, chh, () => {
+      char.campaignLevel = i;
+      char.checkpoint = null;
+      saveCharacter(char);
+      enterLevelIntro();
+    }, unlocked);
+  });
+
+  // change survivor / partner
+  const bw = 320;
+  const by = y0 + chh + 22;
+  const idx = uiButtons.length;
+  const focused = gamepad.connected && idx === gpFocus;
+  ctx.fillStyle = 'rgba(20,24,30,0.94)';
+  ctx.fillRect(cx - bw / 2, by, bw, 42);
+  ctx.strokeStyle = focused ? '#ffd54f' : '#546e7a';
+  ctx.lineWidth = focused ? 3 : 1;
+  ctx.strokeRect(cx - bw / 2, by, bw, 42);
+  ctx.font = 'bold 14px monospace';
+  ctx.fillStyle = '#80cbc4';
+  ctx.fillText(`CHANGE SURVIVOR — ${heroById(char.heroId).name}`, cx, by + 13, bw - 16);
+  button(cx - bw / 2, by, bw, 42, () => {
+    reSelecting = true;
+    selectMode = 'hero';
+    gpFocus = 0;
+    state = 'charselect';
+  });
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#9e9e9e';
+  ctx.fillText(`LV ${char.level} · ⚙ ${char.scrap} · ${char.totalKills} kills · secrets found ${char.secretsFound || 0}`, cx, by + 56);
+  ctx.restore();
+}
 
 function finishSelect() {
+  if (reSelecting) {
+    // survivor swap from the menu — no cinematic replay
+    reSelecting = false;
+    gpFocus = 0;
+    state = 'levelselect';
+    return;
+  }
   // hero-aware opening: the cinematic closes on the survivor you chose
   const h = heroById(char.heroId);
   const heroShot = {
@@ -2588,6 +2720,7 @@ let lastFrame = performance.now();
 function render(dt) {
   uiButtons = [];
   if (state === 'title') return drawTitle();
+  if (state === 'levelselect') return drawLevelSelect();
   if (state === 'charselect') return drawCharSelect();
   if (state === 'cutscene') return drawCutscene(dt);
   if (state === 'levelintro') return drawLevelIntro();
@@ -2741,6 +2874,11 @@ function render(dt) {
     ctx.fillStyle = level().tint;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
+  if (game.time < game.frenzyUntil) {
+    const pulse = 0.05 + 0.04 * Math.sin(performance.now() / 90);
+    ctx.fillStyle = `rgba(255,23,68,${pulse})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
   drawScreenBlood();
   drawHUD();
   drawBanners(dt);
@@ -2778,7 +2916,7 @@ function frame(now) {
   wasGpConnected = gamepad.connected;
 
   // gamepad UI focus: d-pad browses buttons laid out last frame, A activates
-  const uiState = charSheetOpen || state === 'shop' || state === 'charselect';
+  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect';
   if (uiState && uiButtons.length) {
     if (gpPressed('down') || gpPressed('right')) gpFocus = (gpFocus + 1) % uiButtons.length;
     if (gpPressed('up') || gpPressed('left')) gpFocus = (gpFocus - 1 + uiButtons.length) % uiButtons.length;
@@ -2816,7 +2954,8 @@ function frame(now) {
         selectMode = 'hero';
         state = 'charselect';
       } else {
-        enterLevelIntro();
+        gpFocus = 0;
+        state = 'levelselect';
       }
     }
   } else if (state === 'cutscene') {

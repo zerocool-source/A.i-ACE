@@ -26,6 +26,7 @@ export function newCharacter() {
     armor: 0,
     higgsBatteries: 0,
     campaignLevel: 0, // index into LEVELS
+    maxCampaign: 0, // highest level unlocked (for level select)
     totalKills: 0,
   };
 }
@@ -177,6 +178,7 @@ export function loadCharacter() {
       ownedWeapons: parsed.ownedWeapons || base.ownedWeapons,
     };
     if (c.campaignLevel == null || !c.attrs) return null;
+    c.maxCampaign = Math.max(c.maxCampaign || 0, c.campaignLevel);
     return c;
   } catch {
     return null;
