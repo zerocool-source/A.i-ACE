@@ -74,7 +74,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'civilian_m', 'civilian_f',
                     'hero_medic', 'hero_builder', 'hero_hacker', 'hero_cop', 'hero_biker',
                     'hero_engineer', 'hero_veteran', 'hero_athlete',
-                    'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder']) {
+                    'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder',
+                    'crawler', 'screamer', 'rogue']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -211,6 +212,136 @@ function banner(text, sub, color = '#d32f2f') {
 // One squadmate joins after each level, each with their own special:
 // soldier = sustained rifle DPS · medic = healing aura + mid-wave revives
 // commander = piercing magnum · demo = grenades into the thickest cluster
+// ---- level props: buildings & obstacles with collision -----------------------
+// kind: building/car/crypt/grave/pipe/gurney/cabinet/bunker/sandbag/crate
+// solid props block movement; low props let bullets fly over them.
+
+function placeProps(lv, world) {
+  const props = [];
+  const cx = world.w / 2, cy = world.h / 2;
+  const fits = (x, y, w, h) => {
+    if (x < 20 || y < 20 || x + w > world.w - 20 || y + h > world.h - 20) return false;
+    // keep the spawn area clear
+    if (x < cx + 240 && x + w > cx - 240 && y < cy + 240 && y + h > cy - 240) return false;
+    for (const p of props) {
+      if (x < p.x + p.w + 30 && x + w + 30 > p.x && y < p.y + p.h + 30 && y + h + 30 > p.y) return false;
+    }
+    return true;
+  };
+  const scatter = (n, wMin, wMax, hMin, hMax, kind, low) => {
+    for (let i = 0, tries = 0; i < n && tries < n * 30; tries++) {
+      const w = wMin + Math.random() * (wMax - wMin);
+      const h = hMin + Math.random() * (hMax - hMin);
+      const x = 30 + Math.random() * (world.w - w - 60);
+      const y = 30 + Math.random() * (world.h - h - 60);
+      if (fits(x, y, w, h)) {
+        props.push({ x, y, w, h, kind, low: !!low, seed: Math.random() });
+        i++;
+      }
+    }
+  };
+  // apartment blocks / large structures hug the edges
+  const edgeBlocks = (n, kind, bw, bh) => {
+    for (let i = 0, tries = 0; i < n && tries < n * 40; tries++) {
+      const side = Math.floor(Math.random() * 4);
+      const w = bw * (0.7 + Math.random() * 0.6);
+      const h = bh * (0.7 + Math.random() * 0.6);
+      let x, y;
+      if (side === 0) { x = Math.random() * (world.w - w); y = 30 + Math.random() * 80; }
+      else if (side === 1) { x = Math.random() * (world.w - w); y = world.h - h - 30 - Math.random() * 80; }
+      else if (side === 2) { x = 30 + Math.random() * 80; y = Math.random() * (world.h - h); }
+      else { x = world.w - w - 30 - Math.random() * 80; y = Math.random() * (world.h - h); }
+      if (fits(x, y, w, h)) {
+        props.push({ x, y, w, h, kind, low: false, seed: Math.random() });
+        i++;
+      }
+    }
+  };
+  switch (lv.key) {
+    case 'city':
+      edgeBlocks(9, 'building', 280, 180);
+      scatter(14, 64, 80, 32, 40, 'car');
+      scatter(6, 36, 48, 36, 48, 'crate', true);
+      break;
+    case 'graveyard':
+      edgeBlocks(4, 'crypt', 180, 130);
+      scatter(42, 24, 30, 34, 42, 'grave', true);
+      break;
+    case 'sewer':
+      edgeBlocks(6, 'pipe', 340, 60);
+      scatter(10, 200, 320, 44, 60, 'pipe');
+      scatter(8, 40, 56, 40, 56, 'crate', true);
+      break;
+    case 'hospital':
+      edgeBlocks(7, 'building', 260, 170);
+      scatter(16, 30, 40, 62, 80, 'gurney', true);
+      scatter(8, 44, 56, 44, 56, 'cabinet');
+      break;
+    case 'base':
+      edgeBlocks(6, 'bunker', 240, 160);
+      scatter(18, 36, 110, 30, 44, 'sandbag', true);
+      scatter(12, 40, 56, 40, 56, 'crate', true);
+      break;
+  }
+  return props;
+}
+
+// push a circle entity out of solid props (slides along walls)
+function collideProps(e) {
+  for (const pr of game.props) {
+    const px = Math.max(pr.x, Math.min(e.x, pr.x + pr.w));
+    const py = Math.max(pr.y, Math.min(e.y, pr.y + pr.h));
+    const dx = e.x - px, dy = e.y - py;
+    const d2 = dx * dx + dy * dy;
+    const r = e.radius;
+    if (d2 < r * r) {
+      if (d2 === 0) {
+        e.x = pr.x - r; // degenerate: shove left
+      } else {
+        const d = Math.sqrt(d2);
+        e.x = px + (dx / d) * r;
+        e.y = py + (dy / d) * r;
+      }
+    }
+  }
+}
+
+function shotBlocked(x, y) {
+  for (const pr of game.props) {
+    if (pr.low) continue;
+    if (x >= pr.x && x <= pr.x + pr.w && y >= pr.y && y <= pr.y + pr.h) return true;
+  }
+  return false;
+}
+
+// ---- squad radio chatter -------------------------------------------------------
+
+let radioLines = []; // {speaker, text, color, t}
+
+const BANTER = {
+  soldier: ['Contact! They keep coming!', 'Wave clear. Reloading.', 'I count more on the scope.', 'Nice shooting out there.'],
+  medic: ['Anyone bleeding, come to me.', 'Stay inside my aura, people.', 'You\'re patched. Don\'t waste it.', 'I\'m not losing anyone else.'],
+  commander: ['Delta held nine days. We hold longer.', 'Conserve ammo. Make them count.', 'I\'ve seen worse. Barely.', 'Push forward. Now.'],
+  demo: ['Fire in the hole!', 'That cluster\'s gone. You\'re welcome.', 'I LOVE this job.', 'More grenades in the truck. Probably.'],
+  echo: ['ECHO-6: Still reading you. Keep moving.', 'ECHO-6: Signal\'s holding. So are you.', 'ECHO-6: Watch your corners.', 'ECHO-6: Rogue units in your sector. They are NOT friendly.'],
+};
+
+function radio(speaker, text, color) {
+  radioLines.push({ speaker, text, color, t: 5 });
+  if (radioLines.length > 3) radioLines.shift();
+}
+
+function squadBanter() {
+  const g = game;
+  const pool = [['echo', '#80cbc4']];
+  for (const a of g.allies) if (!a.down) pool.push([a.type, a.color]);
+  const [who, color] = pool[Math.floor(Math.random() * pool.length)];
+  const lines = BANTER[who];
+  const name = who === 'echo' ? '' : ALLY_DEFS[who].name + ': ';
+  const line = lines[Math.floor(Math.random() * lines.length)];
+  radio(who, who === 'echo' ? line : `${name}"${line}"`, color);
+}
+
 const ALLY_DEFS = {
   soldier: { name: 'SGT. REYES', hp: 160, damage: 26, fireInterval: 0.22, range: 620, color: '#81c784' },
   medic: { name: 'DOC OKAFOR', hp: 140, damage: 18, fireInterval: 0.5, range: 420, color: '#f8bbd0', healAura: 220, healRate: 4 },
@@ -238,7 +369,7 @@ function newGame() {
       x: world.w / 2, y: world.h / 2,
       radius: 14,
       hp: Math.min(char.hp ?? d.maxHp, d.maxHp),
-      speed: 220, sprintMult: 1.6,
+      speed: 220, sprintMult: 1.75,
       stamina: 1,
       weapon: 'pistol',
       mags: Object.fromEntries(WEAPON_ORDER.map((w) => [w, weaponStats(char, w).magSize])),
@@ -263,6 +394,8 @@ function newGame() {
     dmgNumbers: [],
     buffs: { rage: 0, shield: 0 }, // seconds remaining
     higgs: { charge: 1, activeUntil: 0, ringT: -1 },
+    props: placeProps(lv, world),
+    rogueBannerShown: false,
   };
   // civilians scattered around the map, fleeing for their lives
   for (let i = 0; i < lv.civilians; i++) {
@@ -280,6 +413,19 @@ function newGame() {
   // the squad grows by one member per level completed
   for (let i = 0; i < Math.min(char.campaignLevel, SQUAD_JOIN.length); i++) {
     g.allies.push(makeAlly(SQUAD_JOIN[i], world));
+  }
+  // the partner survivor picked at campaign start fights alongside you
+  if (char.partnerId) {
+    const ph = heroById(char.partnerId);
+    const partner = makeAlly('soldier', world);
+    partner.type = 'partner';
+    partner.sprite = ph.sprite;
+    partner.name = ph.name.split(' ')[0];
+    partner.hp = partner.maxHp = 180;
+    partner.damage = 24;
+    partner.fireInterval = 0.26;
+    partner.color = '#b39ddb';
+    g.allies.push(partner);
   }
   return g;
 }
@@ -358,12 +504,22 @@ function nextWave() {
   let comp = waveComposition(effW);
   const extra = Math.floor(comp.length * (lv.countMult - 1));
   for (let i = 0; i < extra; i++) comp.push(comp[Math.floor(Math.random() * comp.length)]);
+  // feral military units stalk the later levels
+  if (char.campaignLevel >= 2 && game.wave >= 2) {
+    for (let i = 0; i < Math.max(1, Math.floor(game.wave * 0.35)); i++) comp.push('rogue');
+    if (!game.rogueBannerShown) {
+      game.rogueBannerShown = true;
+      banner('ROGUE MILITARY INBOUND', 'they shoot anything that moves — including you', '#ef5350');
+      radio('echo', 'ECHO-6: Those are Delta deserters. The infection took their minds, not their trigger fingers.', '#80cbc4');
+    }
+  }
   if (game.wave === lv.waves) {
     for (let i = 0; i < lv.bosses; i++) comp.push('boss');
     banner(`WAVE ${game.wave}`, 'THE BOSS IS COMING');
   } else {
     banner(`WAVE ${game.wave}`, `${lv.name} — ${game.wave} / ${lv.waves}`);
   }
+  if (game.wave > 1) squadBanter();
   game.spawnQueue = comp;
   game.spawnTimer = 0;
 }
@@ -586,6 +742,7 @@ function update(dt) {
   }
   p.x = Math.max(p.radius, Math.min(g.world.w - p.radius, p.x));
   p.y = Math.max(p.radius, Math.min(g.world.h - p.radius, p.y));
+  collideProps(p);
 
   // -- aim: right stick wins, otherwise mouse (in world space)
   if (gamepad.aiming) {
@@ -715,15 +872,49 @@ function update(dt) {
     const distP = Math.hypot(p.x - z.x, p.y - z.y);
     if (fieldActive && distP < HIGGS.radius + z.radius) z.slowUntil = g.time + 0.3;
     const slowed = g.time < z.slowUntil;
-    const spdZ = z.speed * (slowed ? HIGGS.slowFactor : 1);
+    let spdZ = z.speed * (slowed ? HIGGS.slowFactor : 1);
+    if (z.lunges && distT < 160) spdZ *= 1.8; // crawler pounce
+    if (g.time < z.boostUntil) spdZ *= 1.5; // screamer haste
     z.wobble += dt * 5;
     z.flash = Math.max(0, z.flash - dt);
     const holdPosition = z.ranged && distT < z.ranged.range * 0.85;
-    if (distT > 1 && !holdPosition) {
+    if (z.human) {
+      // rogue military: hold ~380px, strafe, fall back when pressed
+      const nx = (target.x - z.x) / Math.max(1, distT);
+      const ny = (target.y - z.y) / Math.max(1, distT);
+      let mx = 0, my = 0;
+      if (distT > 460) { mx = nx; my = ny; }
+      else if (distT < 280) { mx = -nx; my = -ny; }
+      else {
+        const sgn = Math.sin(z.wobble * 0.6) > 0 ? 1 : -1;
+        mx = -ny * sgn;
+        my = nx * sgn;
+      }
+      z.x += mx * spdZ * dt;
+      z.y += my * spdZ * dt;
+      z.x = Math.max(z.radius, Math.min(g.world.w - z.radius, z.x));
+      z.y = Math.max(z.radius, Math.min(g.world.h - z.radius, z.y));
+    } else if (distT > 1 && !holdPosition) {
       z.x += ((target.x - z.x) / distT) * spdZ * dt;
       z.y += ((target.y - z.y) / distT) * spdZ * dt;
       z.x += Math.cos(z.wobble) * 8 * dt;
       z.y += Math.sin(z.wobble * 1.3) * 8 * dt;
+    }
+    collideProps(z);
+    // screamer: shriek hastes every zombie around it
+    if (z.screams) {
+      z.screamTimer -= dt;
+      if (z.screamTimer <= 0) {
+        z.screamTimer = z.screams.interval;
+        sfx.playScream();
+        g.explosions.push({ x: z.x, y: z.y, r: z.screams.radius, t: 0.45, scream: true });
+        for (const z2 of g.zombies) {
+          if (z2 === z || z2.human) continue;
+          if (Math.hypot(z2.x - z.x, z2.y - z.y) < z.screams.radius) {
+            z2.boostUntil = g.time + z.screams.boost;
+          }
+        }
+      }
     }
     z.attackCooldown -= dt;
     if (distT < z.radius + (target.radius ?? 14) + 4 && z.attackCooldown <= 0) {
@@ -759,6 +950,7 @@ function update(dt) {
           x: z.x, y: z.y,
           vx: Math.cos(sa) * z.ranged.shotSpeed, vy: Math.sin(sa) * z.ranged.shotSpeed,
           damage: z.damage, life: 1.6,
+          kind: z.ranged.bullet ? 'bullet' : 'acid',
         });
       }
     }
@@ -811,6 +1003,7 @@ function update(dt) {
     }
     c.x = Math.max(c.radius, Math.min(g.world.w - c.radius, c.x));
     c.y = Math.max(c.radius, Math.min(g.world.h - c.radius, c.y));
+    collideProps(c);
   }
   // the turned rise as walkers
   for (const c of g.civilians) {
@@ -849,6 +1042,7 @@ function update(dt) {
       a.x += ((p.x - a.x) / dp) * 200 * dt;
       a.y += ((p.y - a.y) / dp) * 200 * dt;
     }
+    collideProps(a);
     let nz = null, nd = 1e9;
     for (const z of g.zombies) {
       const dd = Math.hypot(z.x - a.x, z.y - a.y);
@@ -900,6 +1094,10 @@ function update(dt) {
     s.x += s.vx * dt;
     s.y += s.vy * dt;
     s.life -= dt;
+    if (s.life > 0 && shotBlocked(s.x, s.y)) {
+      s.life = 0;
+      continue;
+    }
     if (Math.hypot(p.x - s.x, p.y - s.y) < p.radius + 6) {
       const dmg = Math.max(1, s.damage - effArmor());
       p.hp -= dmg;
@@ -956,6 +1154,11 @@ function update(dt) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
+    if (b.life > 0 && shotBlocked(b.x, b.y)) {
+      b.life = 0;
+      spawnBlood(b.x, b.y, 3, '#9e9e9e'); // masonry dust
+      continue;
+    }
     const dir = Math.atan2(b.vy, b.vx);
     for (const z of g.zombies) {
       if (z.hp <= 0 || b.hit.has(z)) continue;
@@ -1054,6 +1257,8 @@ function update(dt) {
   g.dmgNumbers = g.dmgNumbers.filter((n) => n.life > 0);
   for (const sb of screenBlood) sb.alpha -= dt * 0.12;
   screenBlood = screenBlood.filter((sb) => sb.alpha > 0.02);
+  for (const rl of radioLines) rl.t -= dt;
+  radioLines = radioLines.filter((rl) => rl.t > 0);
 
   p.hurtFlash = Math.max(0, p.hurtFlash - dt);
 
@@ -1146,11 +1351,118 @@ function drawGround() {
         ctx.drawImage(ground, x, y, tile, tile);
     ctx.globalAlpha = 1;
   }
+  // roads through the city / base
+  const lv = level();
+  if (lv.key === 'city' || lv.key === 'base') {
+    const roadW = 150;
+    ctx.fillStyle = 'rgba(24,26,30,0.85)';
+    ctx.fillRect(0, g.world.h / 2 - roadW / 2, g.world.w, roadW);
+    ctx.fillRect(g.world.w / 2 - roadW / 2, 0, roadW, g.world.h);
+    // dashed lane markings
+    ctx.fillStyle = 'rgba(201,180,88,0.5)';
+    for (let x = 20; x < g.world.w; x += 90) ctx.fillRect(x, g.world.h / 2 - 3, 45, 6);
+    for (let y = 20; y < g.world.h; y += 90) ctx.fillRect(g.world.w / 2 - 3, y, 6, 45);
+  }
   // world boundary
   ctx.strokeStyle = 'rgba(229,57,53,0.25)';
   ctx.lineWidth = 4;
   ctx.strokeRect(2, 2, g.world.w - 4, g.world.h - 4);
   ctx.drawImage(decalCanvas, 0, 0);
+  drawProps();
+}
+
+const CAR_COLORS = ['#4e4448', '#3e4a55', '#5a4a3a', '#46524a', '#52404f'];
+
+function drawProps() {
+  for (const pr of game.props) {
+    // skip props far outside the camera
+    if (pr.x + pr.w < cam.x - 60 || pr.x > cam.x + canvas.width + 60 ||
+        pr.y + pr.h < cam.y - 60 || pr.y > cam.y + canvas.height + 60) continue;
+    // drop shadow sells the height of tall structures
+    if (!pr.low) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(pr.x + 7, pr.y + 9, pr.w, pr.h);
+    }
+    if (pr.kind === 'building' || pr.kind === 'crypt' || pr.kind === 'bunker') {
+      const body = { building: '#181c23', crypt: '#262b26', bunker: '#22281f' }[pr.kind];
+      const edge = { building: '#39424e', crypt: '#3e463e', bunker: '#3c4434' }[pr.kind];
+      ctx.fillStyle = body;
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(pr.x + 1.5, pr.y + 1.5, pr.w - 3, pr.h - 3);
+      if (pr.kind === 'building') {
+        // rooftop window/vent grid, a few windows still lit
+        for (let wx = pr.x + 14; wx < pr.x + pr.w - 22; wx += 26) {
+          for (let wy = pr.y + 14; wy < pr.y + pr.h - 22; wy += 26) {
+            const lit = ((wx * 13 + wy * 7 + pr.seed * 1000) | 0) % 17 === 0;
+            ctx.fillStyle = lit ? '#5d4a1e' : '#222a35';
+            ctx.fillRect(wx, wy, 12, 12);
+          }
+        }
+      } else if (pr.kind === 'crypt') {
+        ctx.fillStyle = '#3e463e';
+        ctx.fillRect(pr.x + pr.w / 2 - 4, pr.y + 12, 8, pr.h - 24);
+        ctx.fillRect(pr.x + pr.w / 2 - 14, pr.y + 24, 28, 8);
+      } else {
+        ctx.fillStyle = 'rgba(255,193,7,0.25)';
+        for (let i = 0; i < 4; i++) ctx.fillRect(pr.x + 6 + i * 16, pr.y + 6, 8, 8);
+      }
+    } else if (pr.kind === 'car') {
+      ctx.fillStyle = CAR_COLORS[(pr.seed * CAR_COLORS.length) | 0];
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.fillStyle = '#11151a';
+      const horizontal = pr.w > pr.h;
+      if (horizontal) ctx.fillRect(pr.x + pr.w * 0.22, pr.y + 4, pr.w * 0.2, pr.h - 8);
+      else ctx.fillRect(pr.x + 4, pr.y + pr.h * 0.22, pr.w - 8, pr.h * 0.2);
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.strokeRect(pr.x, pr.y, pr.w, pr.h);
+    } else if (pr.kind === 'grave') {
+      ctx.fillStyle = '#494f56';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.fillStyle = '#5b626a';
+      ctx.fillRect(pr.x, pr.y, pr.w, 6);
+    } else if (pr.kind === 'pipe') {
+      ctx.fillStyle = '#34444c';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.fillStyle = '#46565e';
+      const along = pr.w > pr.h;
+      for (let i = 12; i < (along ? pr.w : pr.h) - 8; i += 34) {
+        if (along) ctx.fillRect(pr.x + i, pr.y + 3, 5, pr.h - 6);
+        else ctx.fillRect(pr.x + 3, pr.y + i, pr.w - 6, 5);
+      }
+    } else if (pr.kind === 'gurney') {
+      ctx.fillStyle = '#7c858d';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.fillStyle = '#aeb6bd';
+      ctx.fillRect(pr.x + 4, pr.y + 6, pr.w - 8, pr.h - 12);
+      ctx.fillStyle = 'rgba(123,29,29,0.5)';
+      ctx.fillRect(pr.x + 6, pr.y + pr.h * 0.3, pr.w - 12, 7);
+    } else if (pr.kind === 'cabinet') {
+      ctx.fillStyle = '#566270';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.strokeStyle = '#3b4550';
+      ctx.strokeRect(pr.x + 4, pr.y + 4, pr.w - 8, pr.h - 8);
+    } else if (pr.kind === 'sandbag') {
+      ctx.fillStyle = '#675c3d';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.fillStyle = '#776b48';
+      const seg = 18;
+      for (let i = 2; i < pr.w - 4; i += seg) ctx.fillRect(pr.x + i, pr.y + 3, seg - 5, pr.h - 6);
+    } else if (pr.kind === 'crate') {
+      ctx.fillStyle = '#594732';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.strokeStyle = '#6f5a40';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(pr.x, pr.y);
+      ctx.lineTo(pr.x + pr.w, pr.y + pr.h);
+      ctx.moveTo(pr.x + pr.w, pr.y);
+      ctx.lineTo(pr.x, pr.y + pr.h);
+      ctx.stroke();
+      ctx.strokeRect(pr.x + 1.5, pr.y + 1.5, pr.w - 3, pr.h - 3);
+    }
+  }
 }
 
 function drawCorpse(co) {
@@ -1250,7 +1562,7 @@ function drawAlly(a) {
   if (a.down) {
     ctx.globalAlpha = 0.55;
     ctx.rotate(0.6);
-    const sprite = SPRITES[a.type];
+    const sprite = SPRITES[a.sprite || a.type];
     if (sprite) {
       ctx.filter = 'brightness(0.5)';
       drawSprite(sprite, a.radius * 3.2);
@@ -1260,7 +1572,7 @@ function drawAlly(a) {
     return;
   }
   ctx.rotate(a.angle);
-  const sprite = SPRITES[a.type];
+  const sprite = SPRITES[a.sprite || a.type];
   if (sprite) drawSprite(sprite, a.radius * 3.4);
   else {
     ctx.fillStyle = a.color;
@@ -1435,6 +1747,10 @@ function drawMinimap() {
     ctx.fillStyle = color;
     ctx.fillRect(mx + x * sx - r / 2, my + y * sy - r / 2, r, r);
   };
+  ctx.fillStyle = 'rgba(255,255,255,0.13)';
+  for (const pr of g.props) {
+    if (!pr.low) ctx.fillRect(mx + pr.x * sx, my + pr.y * sy, Math.max(1, pr.w * sx), Math.max(1, pr.h * sy));
+  }
   for (const c of g.civilians) dot(c.x, c.y, '#ffe082');
   for (const a of g.allies) if (!a.down) dot(a.x, a.y, a.color, 3);
   for (const z of g.zombies) dot(z.x, z.y, z.type === 'boss' ? '#e040fb' : '#ef5350', z.type === 'boss' ? 4 : 2);
@@ -1528,6 +1844,18 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
   ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, canvas.width / 2, 46);
+  // squad radio chatter, bottom-left
+  ctx.textAlign = 'left';
+  ctx.font = '13px monospace';
+  let ry = canvas.height - 30;
+  for (let i = radioLines.length - 1; i >= 0; i--) {
+    const rl = radioLines[i];
+    ctx.globalAlpha = Math.min(1, rl.t);
+    ctx.fillStyle = rl.color;
+    ctx.fillText(rl.text, 20, ry);
+    ry -= 19;
+  }
+  ctx.globalAlpha = 1;
   ctx.restore();
   drawMinimap();
 }
@@ -1706,6 +2034,18 @@ function drawShop() {
   ctx.fillText('[TAB] character sheet — 🎮 d-pad to browse, Ⓐ to buy', cx, deployY + 66);
 }
 
+let selectMode = 'hero'; // 'hero' picks the player, 'partner' picks the companion
+
+function finishSelect() {
+  // hero-aware opening: the cinematic closes on the survivor you chose
+  const h = heroById(char.heroId);
+  const heroShot = {
+    img: 'title-bg.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.15,
+    lines: [`${h.name} — ${h.role.toUpperCase()}.`, h.story],
+  };
+  startCutscene([...OPENING_SHOTS, heroShot], enterLevelIntro);
+}
+
 function drawCharSelect() {
   ctx.fillStyle = '#08090b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1718,7 +2058,7 @@ function drawCharSelect() {
   ctx.fillStyle = '#fff';
   ctx.shadowColor = '#d32f2f';
   ctx.shadowBlur = 18;
-  ctx.fillText('CHOOSE YOUR SURVIVOR', cx, 34);
+  ctx.fillText(selectMode === 'hero' ? 'CHOOSE YOUR SURVIVOR' : 'CHOOSE A PARTNER', cx, 34);
   ctx.shadowBlur = 0;
 
   // 5 x 2 roster grid, scaled to fit the window
@@ -1729,14 +2069,18 @@ function drawCharSelect() {
   const gridW = cols * cw + (cols - 1) * gap;
   const x0 = (canvas.width - gridW) / 2;
   const y0 = 100;
+  let hovered = null;
   HEROES.forEach((hero, i) => {
+    const isOwnHero = selectMode === 'partner' && hero.id === char.heroId;
     const x = x0 + (i % cols) * (cw + gap);
     const y = y0 + Math.floor(i / cols) * (chh + gap);
     const idx = uiButtons.length;
     const focused = gamepad.connected && idx === gpFocus;
-    ctx.fillStyle = 'rgba(20,24,30,0.94)';
+    const m = input.mouse;
+    if (m.x >= x && m.x <= x + cw && m.y >= y && m.y <= y + chh) hovered = hero;
+    ctx.fillStyle = isOwnHero ? 'rgba(12,14,17,0.94)' : 'rgba(20,24,30,0.94)';
     ctx.fillRect(x, y, cw, chh);
-    ctx.strokeStyle = focused ? '#ffd54f' : '#546e7a';
+    ctx.strokeStyle = focused ? '#ffd54f' : isOwnHero ? '#2c343c' : '#546e7a';
     ctx.lineWidth = focused ? 3 : 1;
     ctx.strokeRect(x, y, cw, chh);
     const sprite = SPRITES[hero.sprite];
@@ -1744,6 +2088,7 @@ function drawCharSelect() {
       // drawn upright (sprites face right), fitted inside the card
       ctx.save();
       ctx.translate(x + cw / 2, y + chh * 0.42);
+      if (isOwnHero) ctx.globalAlpha = 0.3;
       drawSprite(sprite, Math.min(cw, chh) * 0.62);
       ctx.restore();
     } else {
@@ -1754,23 +2099,69 @@ function drawCharSelect() {
     }
     ctx.textAlign = 'center';
     ctx.font = 'bold 11px monospace';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(hero.name, x + cw / 2, y + chh - 56, cw - 10);
+    ctx.fillStyle = isOwnHero ? '#546e7a' : '#fff';
+    ctx.fillText(isOwnHero ? 'YOU' : hero.name, x + cw / 2, y + chh - 56, cw - 10);
     ctx.font = '10px monospace';
     ctx.fillStyle = '#90a4ae';
     ctx.fillText(hero.role, x + cw / 2, y + chh - 40, cw - 10);
     ctx.fillStyle = '#80cbc4';
     ctx.fillText(bonusText(hero), x + cw / 2, y + chh - 24, cw - 10);
     button(x, y, cw, chh, () => {
-      char.heroId = hero.id;
-      char.gender = hero.sprite === 'player_f' ? 'f' : 'm';
-      saveCharacter(char);
-      startCutscene(OPENING_SHOTS, enterLevelIntro);
-    });
+      if (selectMode === 'hero') {
+        char.heroId = hero.id;
+        char.gender = hero.sprite === 'player_f' ? 'f' : 'm';
+        saveCharacter(char);
+        selectMode = 'partner';
+        gpFocus = 0;
+      } else {
+        char.partnerId = hero.id;
+        saveCharacter(char);
+        finishSelect();
+      }
+    }, !isOwnHero);
   });
-  ctx.font = '14px monospace';
-  ctx.fillStyle = '#9e9e9e';
-  ctx.fillText('click a survivor — 🎮 d-pad + Ⓐ — bonuses are permanent, favored weapon +15% damage', cx, y0 + rows * chh + gap + 18);
+
+  const footY = y0 + rows * chh + gap + 10;
+  if (selectMode === 'partner') {
+    // lone-wolf option
+    const bw = 280;
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
+    ctx.fillStyle = 'rgba(30,22,22,0.94)';
+    ctx.fillRect(cx - bw / 2, footY, bw, 40);
+    ctx.strokeStyle = focused ? '#ffd54f' : '#7a5454';
+    ctx.lineWidth = focused ? 3 : 1;
+    ctx.strokeRect(cx - bw / 2, footY, bw, 40);
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#ef9a9a';
+    ctx.fillText('GO ALONE — LONE WOLF', cx, footY + 12);
+    button(cx - bw / 2, footY, bw, 40, () => {
+      char.partnerId = null;
+      saveCharacter(char);
+      finishSelect();
+    });
+  }
+
+  // backstory panel for the hovered / focused survivor
+  const detail = hovered || (gamepad.connected && HEROES[Math.min(gpFocus, HEROES.length - 1)]) || null;
+  const panelY = footY + 48;
+  if (detail) {
+    ctx.font = 'bold 13px monospace';
+    ctx.fillStyle = '#ffd54f';
+    ctx.fillText(detail.name + ' — ' + detail.role.toUpperCase(), cx, panelY);
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#cfd8dc';
+    ctx.fillText(detail.story, cx, panelY + 20, canvas.width - 120);
+  } else {
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#9e9e9e';
+    ctx.fillText(
+      selectMode === 'hero'
+        ? 'hover a survivor for their story — bonuses are permanent, favored weapon +15% damage'
+        : 'your partner fights beside you for the whole campaign',
+      cx, panelY
+    );
+  }
   ctx.restore();
 }
 
@@ -2011,8 +2402,17 @@ function render(dt) {
     ctx.lineTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012);
     ctx.stroke();
   }
-  // spitter acid
+  // spitter acid / rogue rifle fire
   for (const s of game.enemyShots) {
+    if (s.kind === 'bullet') {
+      ctx.strokeStyle = '#ff8a80';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x - s.vx * 0.014, s.y - s.vy * 0.014);
+      ctx.stroke();
+      continue;
+    }
     ctx.fillStyle = '#aeea00';
     ctx.beginPath();
     ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
@@ -2053,9 +2453,17 @@ function render(dt) {
     ctx.restore();
   }
   drawPlayer();
-  // explosions: flash + expanding ring
+  // explosions: flash + expanding ring (screams are a pale ring only)
   for (const ex of game.explosions) {
     const t = 1 - ex.t / 0.45;
+    if (ex.scream) {
+      ctx.strokeStyle = `rgba(224,224,224,${(1 - t) * 0.7})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(ex.x, ex.y, ex.r * t, 0, Math.PI * 2);
+      ctx.stroke();
+      continue;
+    }
     ctx.fillStyle = `rgba(255,171,64,${(1 - t) * 0.5})`;
     ctx.beginPath();
     ctx.arc(ex.x, ex.y, ex.r * (0.4 + t * 0.6), 0, Math.PI * 2);
@@ -2181,6 +2589,7 @@ function frame(now) {
         char.seenIntro = true;
         saveCharacter(char);
         gpFocus = 0;
+        selectMode = 'hero';
         state = 'charselect';
       } else {
         enterLevelIntro();

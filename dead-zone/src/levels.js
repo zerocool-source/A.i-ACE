@@ -6,7 +6,7 @@ export const LEVELS = [
     key: 'city',
     name: 'CITY OUTSKIRTS',
     subtitle: 'The evacuation failed. Fight your way out of the suburbs.',
-    ground: '/sprites/ground.png',
+    ground: '/levels/city-ground.png',
     intro: '/levels/city-intro.png',
     tint: null,
     waves: 10,
