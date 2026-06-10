@@ -89,6 +89,13 @@ function drawSprite(sp, size) {
   ctx.drawImage(sp, (-sp.width * k) / 2, (-sp.height * k) / 2, sp.width * k, sp.height * k);
 }
 
+// draws a trimmed sprite centered at the origin, contained in maxW x maxH —
+// keeps differently-shaped cutouts looking the same size on UI cards
+function drawSpriteFit(sp, maxW, maxH) {
+  const k = Math.min(maxW / sp.width, maxH / sp.height);
+  ctx.drawImage(sp, (-sp.width * k) / 2, (-sp.height * k) / 2, sp.width * k, sp.height * k);
+}
+
 const titleArt = new Image();
 titleArt.src = asset('title-bg.png');
 
@@ -2054,21 +2061,22 @@ function drawCharSelect() {
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.font = 'bold 34px monospace';
+  ctx.font = 'bold 30px monospace';
   ctx.fillStyle = '#fff';
   ctx.shadowColor = '#d32f2f';
   ctx.shadowBlur = 18;
-  ctx.fillText(selectMode === 'hero' ? 'CHOOSE YOUR SURVIVOR' : 'CHOOSE A PARTNER', cx, 34);
+  ctx.fillText(selectMode === 'hero' ? 'CHOOSE YOUR SURVIVOR' : 'CHOOSE A PARTNER', cx, 22);
   ctx.shadowBlur = 0;
 
-  // 5 x 2 roster grid, scaled to fit the window
+  // 5 x 2 roster grid sized so grid + footer + story bar always fit on screen
   const cols = 5, rows = 2;
-  const gap = 14;
-  const cw = Math.min(215, (canvas.width - 80 - gap * (cols - 1)) / cols);
-  const chh = Math.min(250, (canvas.height - 200 - gap) / rows);
+  const gap = 12;
+  const y0 = 70;
+  const reservedBottom = selectMode === 'partner' ? 150 : 100; // footer + story bar
+  const cw = Math.min(215, (canvas.width - 70 - gap * (cols - 1)) / cols);
+  const chh = Math.max(150, Math.min(250, (canvas.height - y0 - reservedBottom - gap) / rows));
   const gridW = cols * cw + (cols - 1) * gap;
   const x0 = (canvas.width - gridW) / 2;
-  const y0 = 100;
   let hovered = null;
   HEROES.forEach((hero, i) => {
     const isOwnHero = selectMode === 'partner' && hero.id === char.heroId;
@@ -2078,34 +2086,43 @@ function drawCharSelect() {
     const focused = gamepad.connected && idx === gpFocus;
     const m = input.mouse;
     if (m.x >= x && m.x <= x + cw && m.y >= y && m.y <= y + chh) hovered = hero;
-    ctx.fillStyle = isOwnHero ? 'rgba(12,14,17,0.94)' : 'rgba(20,24,30,0.94)';
+    const isHovered = hovered === hero && !isOwnHero;
+    ctx.fillStyle = isOwnHero ? 'rgba(12,14,17,0.94)' : isHovered ? 'rgba(30,36,44,0.96)' : 'rgba(20,24,30,0.94)';
     ctx.fillRect(x, y, cw, chh);
-    ctx.strokeStyle = focused ? '#ffd54f' : isOwnHero ? '#2c343c' : '#546e7a';
-    ctx.lineWidth = focused ? 3 : 1;
+    ctx.strokeStyle = focused || isHovered ? '#ffd54f' : isOwnHero ? '#2c343c' : '#546e7a';
+    ctx.lineWidth = focused || isHovered ? 2.5 : 1;
     ctx.strokeRect(x, y, cw, chh);
+    // pedestal glow lifts dark sprites and keeps every portrait the same scale
+    const px = x + cw / 2;
+    const py = y + (chh - 54) / 2 + 6;
+    const grad = ctx.createRadialGradient(px, py, 6, px, py, cw * 0.42);
+    grad.addColorStop(0, 'rgba(120,140,160,0.22)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x + 4, y + 4, cw - 8, chh - 58);
     const sprite = SPRITES[hero.sprite];
     if (sprite) {
-      // drawn upright (sprites face right), fitted inside the card
+      // drawn upright (sprites face right), contained in a uniform box
       ctx.save();
-      ctx.translate(x + cw / 2, y + chh * 0.42);
+      ctx.translate(px, py);
       if (isOwnHero) ctx.globalAlpha = 0.3;
-      drawSprite(sprite, Math.min(cw, chh) * 0.62);
+      drawSpriteFit(sprite, cw * 0.66, (chh - 64) * 0.86);
       ctx.restore();
     } else {
       ctx.fillStyle = '#37474f';
       ctx.beginPath();
-      ctx.arc(x + cw / 2, y + chh * 0.42, 30, 0, Math.PI * 2);
+      ctx.arc(px, py, 28, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.textAlign = 'center';
     ctx.font = 'bold 11px monospace';
     ctx.fillStyle = isOwnHero ? '#546e7a' : '#fff';
-    ctx.fillText(isOwnHero ? 'YOU' : hero.name, x + cw / 2, y + chh - 56, cw - 10);
+    ctx.fillText(isOwnHero ? 'YOU' : hero.name, px, y + chh - 48, cw - 12);
     ctx.font = '10px monospace';
     ctx.fillStyle = '#90a4ae';
-    ctx.fillText(hero.role, x + cw / 2, y + chh - 40, cw - 10);
+    ctx.fillText(hero.role, px, y + chh - 33, cw - 12);
     ctx.fillStyle = '#80cbc4';
-    ctx.fillText(bonusText(hero), x + cw / 2, y + chh - 24, cw - 10);
+    ctx.fillText(bonusText(hero), px, y + chh - 18, cw - 12);
     button(x, y, cw, chh, () => {
       if (selectMode === 'hero') {
         char.heroId = hero.id;
@@ -2121,45 +2138,64 @@ function drawCharSelect() {
     }, !isOwnHero);
   });
 
-  const footY = y0 + rows * chh + gap + 10;
   if (selectMode === 'partner') {
-    // lone-wolf option
+    // lone-wolf option directly under the grid
+    const footY = y0 + rows * chh + gap + 6;
     const bw = 280;
     const idx = uiButtons.length;
     const focused = gamepad.connected && idx === gpFocus;
     ctx.fillStyle = 'rgba(30,22,22,0.94)';
-    ctx.fillRect(cx - bw / 2, footY, bw, 40);
+    ctx.fillRect(cx - bw / 2, footY, bw, 38);
     ctx.strokeStyle = focused ? '#ffd54f' : '#7a5454';
     ctx.lineWidth = focused ? 3 : 1;
-    ctx.strokeRect(cx - bw / 2, footY, bw, 40);
+    ctx.strokeRect(cx - bw / 2, footY, bw, 38);
     ctx.font = 'bold 14px monospace';
     ctx.fillStyle = '#ef9a9a';
-    ctx.fillText('GO ALONE — LONE WOLF', cx, footY + 12);
-    button(cx - bw / 2, footY, bw, 40, () => {
+    ctx.fillText('GO ALONE — LONE WOLF', cx, footY + 11);
+    button(cx - bw / 2, footY, bw, 38, () => {
       char.partnerId = null;
       saveCharacter(char);
       finishSelect();
     });
   }
 
-  // backstory panel for the hovered / focused survivor
+  // backstory bar pinned to the bottom of the screen so it never clips
   const detail = hovered || (gamepad.connected && HEROES[Math.min(gpFocus, HEROES.length - 1)]) || null;
-  const panelY = footY + 48;
+  const barH = 64;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, canvas.height - barH, canvas.width, barH);
+  ctx.strokeStyle = '#2c343c';
+  ctx.beginPath();
+  ctx.moveTo(0, canvas.height - barH);
+  ctx.lineTo(canvas.width, canvas.height - barH);
+  ctx.stroke();
   if (detail) {
     ctx.font = 'bold 13px monospace';
     ctx.fillStyle = '#ffd54f';
-    ctx.fillText(detail.name + ' — ' + detail.role.toUpperCase(), cx, panelY);
+    ctx.fillText(detail.name + ' — ' + detail.role.toUpperCase(), cx, canvas.height - barH + 10);
+    // wrap the story onto up to two lines
     ctx.font = '13px monospace';
     ctx.fillStyle = '#cfd8dc';
-    ctx.fillText(detail.story, cx, panelY + 20, canvas.width - 120);
+    const maxW = canvas.width - 100;
+    const words = detail.story.split(' ');
+    let line = '', lines = [];
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > maxW && line) {
+        lines.push(line);
+        line = w;
+      } else line = test;
+    }
+    lines.push(line);
+    lines.slice(0, 2).forEach((l, i) => ctx.fillText(l, cx, canvas.height - barH + 28 + i * 17));
   } else {
     ctx.font = '13px monospace';
     ctx.fillStyle = '#9e9e9e';
     ctx.fillText(
       selectMode === 'hero'
         ? 'hover a survivor for their story — bonuses are permanent, favored weapon +15% damage'
-        : 'your partner fights beside you for the whole campaign',
-      cx, panelY
+        : 'your partner fights beside you for the whole campaign — or go in alone',
+      cx, canvas.height - barH + 24
     );
   }
   ctx.restore();
