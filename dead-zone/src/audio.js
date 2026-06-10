@@ -177,6 +177,94 @@ export function playHiggsWhomp() {
   src.start(t);
 }
 
+export function playLevelUp() {
+  const c = ac();
+  const t = c.currentTime;
+  // rising major arpeggio
+  [261.6, 329.6, 392, 523.3].forEach((f, i) => {
+    const osc = c.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = f;
+    const g = c.createGain();
+    const t0 = t + i * 0.09;
+    g.gain.setValueAtTime(0.001, t0);
+    g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.5);
+    osc.connect(g).connect(master);
+    osc.start(t0);
+    osc.stop(t0 + 0.55);
+  });
+}
+
+export function playScrapPickup() {
+  const c = ac();
+  const t = c.currentTime;
+  const osc = c.createOscillator();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(880, t);
+  osc.frequency.exponentialRampToValueAtTime(1320, t + 0.06);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.08, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+  osc.connect(g).connect(master);
+  osc.start(t);
+  osc.stop(t + 0.1);
+}
+
+export function playPurchase() {
+  const c = ac();
+  const t = c.currentTime;
+  [660, 990].forEach((f, i) => {
+    const osc = c.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = f;
+    const g = c.createGain();
+    const t0 = t + i * 0.1;
+    g.gain.setValueAtTime(0.15, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.12);
+    osc.connect(g).connect(master);
+    osc.start(t0);
+    osc.stop(t0 + 0.15);
+  });
+}
+
+export function playDenied() {
+  const c = ac();
+  const t = c.currentTime;
+  const osc = c.createOscillator();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(180, t);
+  osc.frequency.linearRampToValueAtTime(120, t + 0.15);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.15, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  osc.connect(g).connect(master);
+  osc.start(t);
+  osc.stop(t + 0.2);
+}
+
+export function playFanfare() {
+  const c = ac();
+  const t = c.currentTime;
+  // triumphant brass-ish chord run for level clear / victory
+  [[220, 0], [277.2, 0], [329.6, 0], [440, 0.25], [554.4, 0.25], [659.3, 0.25]].forEach(([f, dt]) => {
+    const osc = c.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = f;
+    const filt = c.createBiquadFilter();
+    filt.type = 'lowpass';
+    filt.frequency.value = 1800;
+    const g = c.createGain();
+    const t0 = t + dt;
+    g.gain.setValueAtTime(0.001, t0);
+    g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 1.4);
+    osc.connect(filt).connect(g).connect(master);
+    osc.start(t0);
+    osc.stop(t0 + 1.5);
+  });
+}
+
 export function playGameOverSting() {
   const c = ac();
   const t = c.currentTime;
