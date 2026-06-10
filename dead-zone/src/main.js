@@ -1,7 +1,8 @@
 import { initInput, input, wasPressed, consumePressed } from './input.js';
 import { WEAPONS, WEAPON_ORDER } from './weapons.js';
-import { waveComposition, spawnZombie, ZOMBIE_TYPES } from './zombies.js';
-import { LEVELS, VICTORY_ART, EPILOGUE } from './levels.js';
+import { waveComposition, spawnZombie } from './zombies.js';
+import { LEVELS, VICTORY_ART, EPILOGUE, PRE_CUTSCENES, VICTORY_SHOTS } from './levels.js';
+import { HEROES, heroById, bonusText } from './heroes.js';
 import {
   ATTRS, newCharacter, xpForLevel, grantXp, derived, weaponStats,
   shopCatalog, saveCharacter, loadCharacter, wipeSave,
@@ -69,8 +70,11 @@ function trimToAlphaBounds(img) {
   return t;
 }
 
-for (const name of ['player', 'player_f', 'soldier', 'commander', 'civilian_m', 'civilian_f',
-                    'walker', 'runner', 'brute', 'boss']) {
+for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo',
+                    'civilian_m', 'civilian_f',
+                    'hero_medic', 'hero_builder', 'hero_hacker', 'hero_cop', 'hero_biker',
+                    'hero_engineer', 'hero_veteran', 'hero_athlete',
+                    'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -204,10 +208,16 @@ function banner(text, sub, color = '#d32f2f') {
 
 // ---- game setup --------------------------------------------------------------
 
+// One squadmate joins after each level, each with their own special:
+// soldier = sustained rifle DPS · medic = healing aura + mid-wave revives
+// commander = piercing magnum · demo = grenades into the thickest cluster
 const ALLY_DEFS = {
   soldier: { name: 'SGT. REYES', hp: 160, damage: 26, fireInterval: 0.22, range: 620, color: '#81c784' },
+  medic: { name: 'DOC OKAFOR', hp: 140, damage: 18, fireInterval: 0.5, range: 420, color: '#f8bbd0', healAura: 220, healRate: 4 },
   commander: { name: 'CDR. HALE', hp: 220, damage: 60, fireInterval: 0.6, range: 700, color: '#ffcc80' },
+  demo: { name: '"BOOM" OSORIO', hp: 200, damage: 20, fireInterval: 0.45, range: 520, color: '#ffab40', grenade: { interval: 4.5, radius: 95, damage: 130 } },
 };
+const SQUAD_JOIN = ['soldier', 'medic', 'commander', 'demo']; // index = level completed
 
 function newGame() {
   const d = derived(char);
@@ -242,11 +252,16 @@ function newGame() {
     civilians: [],
     allies: [],
     bullets: [],
+    enemyShots: [],
+    explosions: [],
+    pickups: [],
+    casings: [],
     particles: [],
     gibs: [],
     corpses: [],
     scraps: [],
     dmgNumbers: [],
+    buffs: { rage: 0, shield: 0 }, // seconds remaining
     higgs: { charge: 1, activeUntil: 0, ringT: -1 },
   };
   // civilians scattered around the map, fleeing for their lives
@@ -262,9 +277,10 @@ function newGame() {
       panicTimer: 0,
     });
   }
-  // the squad joins as the story progresses
-  if (char.campaignLevel >= 1) g.allies.push(makeAlly('soldier', world));
-  if (char.campaignLevel >= 3) g.allies.push(makeAlly('commander', world));
+  // the squad grows by one member per level completed
+  for (let i = 0; i < Math.min(char.campaignLevel, SQUAD_JOIN.length); i++) {
+    g.allies.push(makeAlly(SQUAD_JOIN[i], world));
+  }
   return g;
 }
 
@@ -282,6 +298,9 @@ function makeAlly(type, world) {
     fireInterval: def.fireInterval,
     range: def.range,
     color: def.color,
+    healAura: def.healAura, healRate: def.healRate,
+    grenade: def.grenade, grenadeTimer: def.grenade ? def.grenade.interval : 0,
+    reviveTimer: 0,
     down: false,
   };
 }
@@ -295,17 +314,26 @@ function startLevel() {
   screenBlood = [];
   state = 'playing';
   charSheetOpen = false;
-  if (char.campaignLevel === 1 && !char.metSoldier) {
-    char.metSoldier = true;
-    saveCharacter(char);
-    banner('SGT. REYES JOINS YOUR SQUAD', 'a soldier fights at your side', '#81c784');
-  }
-  if (char.campaignLevel === 3 && !char.metCommander) {
-    char.metCommander = true;
-    saveCharacter(char);
-    banner('CDR. HALE JOINS YOUR SQUAD', 'the commander brought her magnum', '#ffcc80');
+  const joinSubs = {
+    soldier: 'sustained rifle fire', medic: 'healing aura — stay close to the cross',
+    commander: 'her magnum pierces the horde', demo: 'grenades into the thickest cluster',
+  };
+  const joinIdx = char.campaignLevel - 1;
+  if (joinIdx >= 0 && joinIdx < SQUAD_JOIN.length) {
+    const type = SQUAD_JOIN[joinIdx];
+    const flag = 'met_' + type;
+    if (!char[flag]) {
+      char[flag] = true;
+      saveCharacter(char);
+      banner(`${ALLY_DEFS[type].name} JOINS YOUR SQUAD`, joinSubs[type], ALLY_DEFS[type].color);
+    }
   }
   if (char.campaignLevel === 0) banner('THE OUTBREAK', 'protect who you can', '#ef9a9a');
+  // resume from the last checkpoint reached on this level
+  if (char.checkpoint && char.checkpoint.lvl === char.campaignLevel && char.checkpoint.wave > 1) {
+    game.wave = char.checkpoint.wave - 1;
+    banner('CHECKPOINT', `resuming at wave ${char.checkpoint.wave}`, '#80cbc4');
+  }
   nextWave();
 }
 
@@ -318,6 +346,13 @@ function nextWave() {
       a.down = false;
       a.hp = a.maxHp * 0.5;
     }
+  }
+  // save point every 3rd wave
+  if (game.wave > 1 && (game.wave - 1) % 3 === 0) {
+    char.checkpoint = { lvl: char.campaignLevel, wave: game.wave };
+    char.hp = game.player.hp;
+    saveCharacter(char);
+    banner('CHECKPOINT REACHED', 'death returns you here', '#80cbc4');
   }
   const effW = char.campaignLevel * lv.waves + game.wave;
   let comp = waveComposition(effW);
@@ -353,6 +388,7 @@ function completeLevel() {
   char.scrap += lv.scrapBonus;
   char.hp = game.player.hp;
   char.totalKills += game.kills;
+  char.checkpoint = null;
   saveCharacter(char);
   sfx.playFanfare();
   gpFocus = 0;
@@ -412,6 +448,75 @@ function addScreenBlood(intensity = 1) {
       alpha: 0.5 + Math.random() * 0.3,
     });
   }
+}
+
+// AoE blast used by exploder zombies and BOOM's grenades
+function explode(x, y, radius, damage, hurtsPlayer) {
+  const g = game;
+  g.explosions.push({ x, y, r: radius, t: 0.45 });
+  sfx.playHiggsWhomp();
+  spawnBlood(x, y, 30, '#7b1d1d');
+  spawnGibs(x, y, 14);
+  stampDecal(x, y, radius * 0.5, true);
+  for (const z of g.zombies) {
+    if (z.hp <= 0) continue;
+    const d = Math.hypot(z.x - x, z.y - y);
+    if (d < radius + z.radius) {
+      z.hp -= damage * (1 - d / (radius + z.radius) * 0.5);
+      z.flash = 0.1;
+      if (z.hp <= 0) killZombie(z, Math.atan2(z.y - y, z.x - x));
+    }
+  }
+  if (hurtsPlayer) {
+    const p = g.player;
+    const dp = Math.hypot(p.x - x, p.y - y);
+    if (dp < radius + p.radius) {
+      const dmg = Math.max(1, Math.round(damage * 0.4) - effArmor());
+      p.hp -= dmg;
+      p.hurtFlash = 0.3;
+      addScreenBlood(1.5);
+      g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#ef5350', life: 0.8, vy: -50 });
+    }
+    for (const a of g.allies) {
+      if (a.down) continue;
+      if (Math.hypot(a.x - x, a.y - y) < radius + a.radius) a.hp -= damage * 0.4;
+    }
+    for (const c of g.civilians) {
+      if (Math.hypot(c.x - x, c.y - y) < radius + c.radius) c.dead = true;
+    }
+  }
+}
+
+function effArmor() {
+  return derived(char).armor + (game.buffs.shield > 0 ? 3 : 0);
+}
+
+const LOOT_TYPES = ['medkit', 'ammo', 'shield', 'rage'];
+
+function dropLoot(x, y, guaranteed = false) {
+  if (!guaranteed && Math.random() > 0.12) return;
+  const type = LOOT_TYPES[Math.floor(Math.random() * LOOT_TYPES.length)];
+  game.pickups.push({ x, y, type, t: 25 });
+}
+
+function applyPickup(type) {
+  const g = game;
+  const d = derived(char);
+  if (type === 'medkit') {
+    g.player.hp = Math.min(d.maxHp, g.player.hp + 35);
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+35 HP', color: '#81c784', life: 1, vy: -50 });
+  } else if (type === 'ammo') {
+    for (const w of WEAPON_ORDER) g.player.mags[w] = weaponStats(char, w).magSize;
+    g.player.reloading = 0;
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: 'AMMO REFILLED', color: '#ffe082', life: 1, vy: -50 });
+  } else if (type === 'shield') {
+    g.buffs.shield = 30;
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+3 ARMOR 30s', color: '#90caf9', life: 1, vy: -50 });
+  } else if (type === 'rage') {
+    g.buffs.rage = 15;
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: 'RAGE x2 DMG', color: '#ff8a80', life: 1, vy: -50 });
+  }
+  sfx.playPurchase();
 }
 
 function goreKill(x, y, radius, dirAngle, big) {
@@ -529,6 +634,13 @@ function update(dt) {
       p.fireCooldown = ws.fireInterval;
       p.muzzleFlash = 0.05;
       sfx.playGunshot(p.weapon);
+      // eject a shell casing perpendicular to the barrel
+      const ca = p.angle + Math.PI / 2 + (Math.random() - 0.5) * 0.6;
+      g.casings.push({
+        x: p.x + Math.cos(p.angle) * p.radius, y: p.y + Math.sin(p.angle) * p.radius,
+        vx: Math.cos(ca) * (120 + Math.random() * 80), vy: Math.sin(ca) * (120 + Math.random() * 80),
+        rot: Math.random() * Math.PI, rotV: (Math.random() - 0.5) * 20, life: 0.6,
+      });
       for (let i = 0; i < ws.pellets; i++) {
         const a = p.angle + (Math.random() - 0.5) * 2 * ws.spread;
         g.bullets.push({
@@ -605,7 +717,9 @@ function update(dt) {
     const slowed = g.time < z.slowUntil;
     const spdZ = z.speed * (slowed ? HIGGS.slowFactor : 1);
     z.wobble += dt * 5;
-    if (distT > 1) {
+    z.flash = Math.max(0, z.flash - dt);
+    const holdPosition = z.ranged && distT < z.ranged.range * 0.85;
+    if (distT > 1 && !holdPosition) {
       z.x += ((target.x - z.x) / distT) * spdZ * dt;
       z.y += ((target.y - z.y) / distT) * spdZ * dt;
       z.x += Math.cos(z.wobble) * 8 * dt;
@@ -615,7 +729,7 @@ function update(dt) {
     if (distT < z.radius + (target.radius ?? 14) + 4 && z.attackCooldown <= 0) {
       z.attackCooldown = 0.8;
       if (target === p) {
-        const dmg = Math.max(1, z.damage - d.armor);
+        const dmg = Math.max(1, z.damage - effArmor());
         p.hp -= dmg;
         p.hurtFlash = 0.25;
         addScreenBlood(1);
@@ -634,6 +748,25 @@ function update(dt) {
         target.hp -= z.damage;
         if (target.hp <= 0) target.dead = true;
       }
+    }
+    // spitter: stop at range and lob acid at its target
+    if (z.ranged && distT < z.ranged.range) {
+      z.spitTimer -= dt;
+      if (z.spitTimer <= 0) {
+        z.spitTimer = z.ranged.interval;
+        const sa = Math.atan2(target.y - z.y, target.x - z.x) + (Math.random() - 0.5) * 0.12;
+        g.enemyShots.push({
+          x: z.x, y: z.y,
+          vx: Math.cos(sa) * z.ranged.shotSpeed, vy: Math.sin(sa) * z.ranged.shotSpeed,
+          damage: z.damage, life: 1.6,
+        });
+      }
+    }
+    // exploder: detonate on contact
+    if (z.explodes && distT < z.radius + (target.radius ?? 14) + 14 && z.hp > 0) {
+      z.hp = 0;
+      z._dead = true;
+      explode(z.x, z.y, z.explodes.radius, z.damage * 2.2, true);
     }
     z.groanTimer -= dt;
     if (z.groanTimer <= 0) {
@@ -697,7 +830,20 @@ function update(dt) {
 
   // -- squad AI: stick near the player, light up the nearest zombie
   for (const a of g.allies) {
-    if (a.down) continue;
+    if (a.down) {
+      // the medic can drag squadmates back onto their feet mid-wave
+      const medic = g.allies.find((m) => m.healAura && !m.down);
+      if (medic && Math.hypot(medic.x - a.x, medic.y - a.y) < medic.healAura) {
+        a.reviveTimer += dt;
+        if (a.reviveTimer > 6) {
+          a.down = false;
+          a.hp = a.maxHp * 0.4;
+          a.reviveTimer = 0;
+          banner(`${a.name} IS BACK UP`, 'patched by DOC OKAFOR', '#f8bbd0');
+        }
+      }
+      continue;
+    }
     const dp = Math.hypot(p.x - a.x, p.y - a.y);
     if (dp > 170) {
       a.x += ((p.x - a.x) / dp) * 200 * dt;
@@ -725,9 +871,85 @@ function update(dt) {
     } else {
       a.angle = p.angle;
     }
+    // medic special: healing aura for the player and nearby squadmates
+    if (a.healAura) {
+      if (Math.hypot(p.x - a.x, p.y - a.y) < a.healAura) {
+        p.hp = Math.min(d.maxHp, p.hp + a.healRate * dt);
+      }
+      for (const other of g.allies) {
+        if (other === a || other.down) continue;
+        if (Math.hypot(other.x - a.x, other.y - a.y) < a.healAura) {
+          other.hp = Math.min(other.maxHp, other.hp + a.healRate * dt);
+        }
+      }
+    }
+    // demo special: grenade into the densest cluster in range
+    if (a.grenade) {
+      a.grenadeTimer -= dt;
+      if (a.grenadeTimer <= 0 && nz && nd < a.range) {
+        a.grenadeTimer = a.grenade.interval;
+        explode(nz.x, nz.y, a.grenade.radius, a.grenade.damage, false);
+      }
+    }
     // squad slowly patches itself up between fights
     if (!nz || nd > 700) a.hp = Math.min(a.maxHp, a.hp + 4 * dt);
   }
+
+  // -- spitter acid in flight
+  for (const s of g.enemyShots) {
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.life -= dt;
+    if (Math.hypot(p.x - s.x, p.y - s.y) < p.radius + 6) {
+      const dmg = Math.max(1, s.damage - effArmor());
+      p.hp -= dmg;
+      p.hurtFlash = 0.2;
+      addScreenBlood(0.6);
+      g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#cddc39', life: 0.8, vy: -50 });
+      s.life = 0;
+    }
+    for (const a of g.allies) {
+      if (a.down || s.life <= 0) continue;
+      if (Math.hypot(a.x - s.x, a.y - s.y) < a.radius + 6) {
+        a.hp -= s.damage;
+        s.life = 0;
+        if (a.hp <= 0 && !a.down) {
+          a.down = true;
+          banner(`${a.name} IS DOWN`, 'the medic can revive them', '#ef9a9a');
+        }
+      }
+    }
+  }
+  g.enemyShots = g.enemyShots.filter((s) => s.life > 0);
+
+  // -- explosions animate
+  for (const ex of g.explosions) ex.t -= dt;
+  g.explosions = g.explosions.filter((ex) => ex.t > 0);
+
+  // -- loot pickups
+  for (const pk of g.pickups) {
+    pk.t -= dt;
+    if (Math.hypot(p.x - pk.x, p.y - pk.y) < p.radius + 14) {
+      applyPickup(pk.type);
+      pk.t = 0;
+    }
+  }
+  g.pickups = g.pickups.filter((pk) => pk.t > 0);
+
+  // -- buffs tick down
+  g.buffs.rage = Math.max(0, g.buffs.rage - dt);
+  g.buffs.shield = Math.max(0, g.buffs.shield - dt);
+
+  // -- shell casings
+  for (const cs of g.casings) {
+    cs.x += cs.vx * dt;
+    cs.y += cs.vy * dt;
+    cs.vx *= 0.9;
+    cs.vy *= 0.9;
+    cs.rot += cs.rotV * dt;
+    cs.life -= dt;
+  }
+  g.casings = g.casings.filter((cs) => cs.life > 0);
 
   // -- bullets
   for (const b of g.bullets) {
@@ -739,8 +961,10 @@ function update(dt) {
       if (z.hp <= 0 || b.hit.has(z)) continue;
       if (Math.hypot(z.x - b.x, z.y - b.y) < z.radius + 3) {
         const crit = !b.friendly && Math.random() < d.critChance;
-        const dmg = Math.round(b.damage * (crit ? 2 : 1));
+        const rage = !b.friendly && g.buffs.rage > 0 ? 2 : 1;
+        const dmg = Math.round(b.damage * (crit ? 2 : 1) * rage);
         z.hp -= dmg;
+        z.flash = 0.08;
         b.hit.add(z);
         if (b.hit.size >= b.pierce) b.life = 0;
         spawnBlood(b.x, b.y, 6, '#7b1d1d', dir);
@@ -847,8 +1071,27 @@ const SCRAP_DROPS = { walker: [3, 3], runner: [5, 3], brute: [12, 6], boss: [80,
 
 function killZombie(z, dirAngle) {
   const g = game;
+  if (z._dead) return;
+  z._dead = true;
   g.score += z.score;
   g.kills++;
+  // 22% of kills pop the head clean off
+  if (Math.random() < 0.22) {
+    g.score += 5;
+    g.dmgNumbers.push({ x: z.x, y: z.y - z.radius - 10, txt: 'HEADSHOT', color: '#ff5252', life: 1.1, vy: -55 });
+    const ha = (dirAngle ?? 0) + (Math.random() - 0.5) * 0.8;
+    g.gibs.push({
+      x: z.x, y: z.y,
+      vx: Math.cos(ha) * 420, vy: Math.sin(ha) * 420,
+      rot: 0, rotV: 18, size: z.radius * 0.55, color: z.color,
+      life: 0.9, head: true,
+    });
+    addScreenBlood(1.2);
+    sfx.playSquelch();
+  }
+  // exploders go off when shot
+  if (z.explodes) explode(z.x, z.y, z.explodes.radius, z.damage * 2.2, true);
+  dropLoot(z.x, z.y, z.type === 'brute' || z.type === 'boss');
   goreKill(z.x, z.y, z.radius, dirAngle, z.type === 'boss' || z.type === 'brute');
   g.corpses.push({ x: z.x, y: z.y, angle: dirAngle ?? Math.random() * Math.PI * 2, type: z.type, radius: z.radius, t: 12 });
   const [base, rand] = SCRAP_DROPS[z.type];
@@ -955,6 +1198,12 @@ function drawZombie(z) {
     ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (z.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${z.flash * 7})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
   if (slowed) {
     ctx.strokeStyle = 'rgba(100,181,246,0.8)';
     ctx.lineWidth = 2;
@@ -988,6 +1237,14 @@ function drawCivilian(c) {
 }
 
 function drawAlly(a) {
+  // medic healing aura
+  if (a.healAura && !a.down) {
+    ctx.strokeStyle = 'rgba(248,187,208,0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, a.healAura, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   ctx.save();
   ctx.translate(a.x, a.y);
   if (a.down) {
@@ -1032,7 +1289,7 @@ function drawPlayer() {
   ctx.save();
   ctx.translate(p.x, p.y);
   ctx.rotate(p.angle);
-  const sprite = SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
+  const sprite = SPRITES[heroById(char.heroId).sprite] || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
   if (sprite) {
     drawSprite(sprite, p.radius * 3.6);
   } else {
@@ -1240,7 +1497,21 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   const ammoTxt = p.reloading > 0 ? 'RELOADING…' : `${p.mags[p.weapon]} / ${ws.magSize}`;
   const tierTxt = ws.tier > 0 ? ` MK${ws.tier + 1}` : '';
-  ctx.fillText(`${ws.name}${tierTxt}  ${ammoTxt}`, canvas.width - 24, canvas.height - 70);
+  const favTxt = ws.favored ? '★' : '';
+  ctx.fillText(`${favTxt}${ws.name}${tierTxt}  ${ammoTxt}`, canvas.width - 24, canvas.height - 70);
+  // active loot buffs
+  let bx = canvas.width - 24;
+  if (game.buffs.rage > 0) {
+    ctx.fillStyle = '#ff7043';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText(`RAGE ${Math.ceil(game.buffs.rage)}s`, bx, canvas.height - 96);
+    bx -= 110;
+  }
+  if (game.buffs.shield > 0) {
+    ctx.fillStyle = '#42a5f5';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText(`SHIELD ${Math.ceil(game.buffs.shield)}s`, bx, canvas.height - 96);
+  }
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
   const keys = ownedList().map((w) => `[${WEAPONS[w].key}]${WEAPONS[w].name}`).join(' ');
@@ -1303,7 +1574,7 @@ function drawCharSheet() {
   ctx.textBaseline = 'top';
   ctx.font = 'bold 24px monospace';
   ctx.fillStyle = '#ce93d8';
-  ctx.fillText(`SURVIVOR — LEVEL ${char.level}`, x + 24, y + 20);
+  ctx.fillText(`${heroById(char.heroId).name} — LEVEL ${char.level}`, x + 24, y + 20);
   ctx.font = '14px monospace';
   ctx.fillStyle = '#9e9e9e';
   ctx.fillText(`XP ${char.xp}/${xpForLevel(char.level)}   SCRAP ${char.scrap}   KILLS ${char.totalKills}`, x + 24, y + 52);
@@ -1419,8 +1690,12 @@ function drawShop() {
     char.hp = Math.min(char.hp ?? derived(char).maxHp, derived(char).maxHp);
     saveCharacter(char);
     if (char.campaignLevel >= LEVELS.length) {
-      state = 'victory';
-      sfx.playFanfare();
+      startCutscene(VICTORY_SHOTS, () => {
+        state = 'victory';
+        sfx.playFanfare();
+      });
+    } else if (PRE_CUTSCENES[char.campaignLevel]) {
+      startCutscene(PRE_CUTSCENES[char.campaignLevel], enterLevelIntro);
     } else {
       enterLevelIntro();
     }
@@ -1434,58 +1709,68 @@ function drawShop() {
 function drawCharSelect() {
   ctx.fillStyle = '#08090b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (titleArt.complete && titleArt.naturalWidth) drawCoverImage(titleArt, 0.22);
+  if (titleArt.complete && titleArt.naturalWidth) drawCoverImage(titleArt, 0.18);
   const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.font = 'bold 36px monospace';
+  ctx.font = 'bold 34px monospace';
   ctx.fillStyle = '#fff';
   ctx.shadowColor = '#d32f2f';
   ctx.shadowBlur = 18;
-  ctx.fillText('CHOOSE YOUR SURVIVOR', cx, cy - 220);
+  ctx.fillText('CHOOSE YOUR SURVIVOR', cx, 34);
   ctx.shadowBlur = 0;
 
-  const cards = [
-    { g: 'm', label: 'JACK "HAVOC" MILLER', sub: 'ex-SWAT · starts with the rifle drilled in', sprite: 'player' },
-    { g: 'f', label: 'MAYA "GHOST" REYES', sub: 'urban scout · the SMG sings for her', sprite: 'player_f' },
-  ];
-  const cw = 280, chh = 300, gap = 60;
-  cards.forEach((card, i) => {
-    const x = cx - cw - gap / 2 + i * (cw + gap);
-    const y = cy - 160;
+  // 5 x 2 roster grid, scaled to fit the window
+  const cols = 5, rows = 2;
+  const gap = 14;
+  const cw = Math.min(215, (canvas.width - 80 - gap * (cols - 1)) / cols);
+  const chh = Math.min(250, (canvas.height - 200 - gap) / rows);
+  const gridW = cols * cw + (cols - 1) * gap;
+  const x0 = (canvas.width - gridW) / 2;
+  const y0 = 100;
+  HEROES.forEach((hero, i) => {
+    const x = x0 + (i % cols) * (cw + gap);
+    const y = y0 + Math.floor(i / cols) * (chh + gap);
     const idx = uiButtons.length;
     const focused = gamepad.connected && idx === gpFocus;
-    ctx.fillStyle = 'rgba(20,24,30,0.92)';
+    ctx.fillStyle = 'rgba(20,24,30,0.94)';
     ctx.fillRect(x, y, cw, chh);
     ctx.strokeStyle = focused ? '#ffd54f' : '#546e7a';
     ctx.lineWidth = focused ? 3 : 1;
     ctx.strokeRect(x, y, cw, chh);
-    const sprite = SPRITES[card.sprite];
+    const sprite = SPRITES[hero.sprite];
     if (sprite) {
+      // drawn upright (sprites face right), fitted inside the card
       ctx.save();
-      ctx.translate(x + cw / 2, y + 130);
-      ctx.rotate(-Math.PI / 2);
-      drawSprite(sprite, 170);
+      ctx.translate(x + cw / 2, y + chh * 0.42);
+      drawSprite(sprite, Math.min(cw, chh) * 0.62);
       ctx.restore();
+    } else {
+      ctx.fillStyle = '#37474f';
+      ctx.beginPath();
+      ctx.arc(x + cw / 2, y + chh * 0.42, 30, 0, Math.PI * 2);
+      ctx.fill();
     }
-    ctx.font = 'bold 15px monospace';
-    ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
-    ctx.fillText(card.label, x + cw / 2, y + chh - 60);
-    ctx.font = '11px monospace';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(hero.name, x + cw / 2, y + chh - 56, cw - 10);
+    ctx.font = '10px monospace';
     ctx.fillStyle = '#90a4ae';
-    ctx.fillText(card.sub, x + cw / 2, y + chh - 36);
+    ctx.fillText(hero.role, x + cw / 2, y + chh - 40, cw - 10);
+    ctx.fillStyle = '#80cbc4';
+    ctx.fillText(bonusText(hero), x + cw / 2, y + chh - 24, cw - 10);
     button(x, y, cw, chh, () => {
-      char.gender = card.g;
+      char.heroId = hero.id;
+      char.gender = hero.sprite === 'player_f' ? 'f' : 'm';
       saveCharacter(char);
       startCutscene(OPENING_SHOTS, enterLevelIntro);
     });
   });
   ctx.font = '14px monospace';
   ctx.fillStyle = '#9e9e9e';
-  ctx.fillText('click a survivor — 🎮 d-pad + Ⓐ', cx, cy + 170);
+  ctx.fillText('click a survivor — 🎮 d-pad + Ⓐ — bonuses are permanent, favored weapon +15% damage', cx, y0 + rows * chh + gap + 18);
   ctx.restore();
 }
 
@@ -1726,13 +2011,87 @@ function render(dt) {
     ctx.lineTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012);
     ctx.stroke();
   }
+  // spitter acid
+  for (const s of game.enemyShots) {
+    ctx.fillStyle = '#aeea00';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(174,234,0,0.35)';
+    ctx.beginPath();
+    ctx.arc(s.x - s.vx * 0.02, s.y - s.vy * 0.02, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // loot pickups (blinking when about to expire)
+  for (const pk of game.pickups) {
+    if (pk.t < 5 && Math.floor(pk.t * 6) % 2 === 0) continue;
+    ctx.save();
+    ctx.translate(pk.x, pk.y);
+    const colors = { medkit: '#ef5350', ammo: '#ffca28', shield: '#42a5f5', rage: '#ff7043' };
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(-11, -11, 22, 22);
+    ctx.strokeStyle = colors[pk.type];
+    ctx.strokeRect(-11, -11, 22, 22);
+    ctx.fillStyle = colors[pk.type];
+    if (pk.type === 'medkit') {
+      ctx.fillRect(-7, -2, 14, 4);
+      ctx.fillRect(-2, -7, 4, 14);
+    } else if (pk.type === 'ammo') {
+      ctx.fillRect(-6, -5, 4, 10);
+      ctx.fillRect(-1, -5, 4, 10);
+      ctx.fillRect(4, -5, 4, 10);
+    } else if (pk.type === 'shield') {
+      ctx.beginPath();
+      ctx.arc(0, 0, 7, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('!', 0, 1);
+    }
+    ctx.restore();
+  }
   drawPlayer();
+  // explosions: flash + expanding ring
+  for (const ex of game.explosions) {
+    const t = 1 - ex.t / 0.45;
+    ctx.fillStyle = `rgba(255,171,64,${(1 - t) * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(ex.x, ex.y, ex.r * (0.4 + t * 0.6), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255,224,130,${1 - t})`;
+    ctx.lineWidth = 6 * (1 - t) + 1;
+    ctx.beginPath();
+    ctx.arc(ex.x, ex.y, ex.r * (0.3 + t * 1.1), 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // shell casings
+  for (const cs of game.casings) {
+    ctx.save();
+    ctx.translate(cs.x, cs.y);
+    ctx.rotate(cs.rot);
+    ctx.globalAlpha = Math.min(1, cs.life * 3);
+    ctx.fillStyle = '#ffd54f';
+    ctx.fillRect(-2.5, -1, 5, 2);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
   for (const gb of game.gibs) {
     ctx.save();
     ctx.translate(gb.x, gb.y);
     ctx.rotate(gb.rot);
     ctx.fillStyle = gb.color;
-    ctx.fillRect(-gb.size / 2, -gb.size / 2, gb.size, gb.size);
+    if (gb.head) {
+      // a popped head tumbling away, trailing blood
+      ctx.beginPath();
+      ctx.arc(0, 0, gb.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#7b1d1d';
+      ctx.fillRect(-gb.size, -2, gb.size, 4);
+    } else {
+      ctx.fillRect(-gb.size / 2, -gb.size / 2, gb.size, gb.size);
+    }
     ctx.restore();
   }
   for (const pa of game.particles) {

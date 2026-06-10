@@ -1,6 +1,7 @@
 // RPG layer: character XP/levels, four allocatable attributes, scrap currency,
 // weapon upgrade tiers, gear — persisted to localStorage between sessions.
 import { WEAPONS, WEAPON_ORDER, STARTING_WEAPONS } from './weapons.js';
+import { heroById } from './heroes.js';
 
 const SAVE_KEY = 'deadzone-save-v1';
 
@@ -20,6 +21,7 @@ export function newCharacter() {
     scrap: 0,
     weaponTiers: Object.fromEntries(WEAPON_ORDER.map((w) => [w, 0])),
     ownedWeapons: [...STARTING_WEAPONS],
+    heroId: 'jack',
     gender: 'm',
     armor: 0,
     higgsBatteries: 0,
@@ -47,8 +49,16 @@ export function grantXp(char, amount) {
 
 // ---- derived stats ------------------------------------------------------
 
+// allocated points plus the hero's permanent bonus
+export function effAttrs(char) {
+  const h = heroById(char.heroId);
+  const out = { ...char.attrs };
+  for (const [k, v] of Object.entries(h.bonus)) out[k] = (out[k] || 0) + v;
+  return out;
+}
+
 export function derived(char) {
-  const a = char.attrs;
+  const a = effAttrs(char);
   return {
     damageMult: 1 + a.str * 0.04,
     moveMult: 1 + a.agi * 0.02,
@@ -65,12 +75,14 @@ export function weaponStats(char, weaponKey) {
   const base = WEAPONS[weaponKey];
   const tier = char.weaponTiers[weaponKey];
   const d = derived(char);
+  const favored = heroById(char.heroId).favored === weaponKey ? 1.15 : 1;
   return {
     ...base,
-    damage: base.damage * (1 + tier * 0.15) * d.damageMult,
+    damage: base.damage * (1 + tier * 0.15) * d.damageMult * favored,
     magSize: Math.round(base.magSize * (1 + tier * 0.2)),
     reloadTime: base.reloadTime * d.reloadMult,
     tier,
+    favored: favored > 1,
   };
 }
 
@@ -86,10 +98,16 @@ export function shopCatalog(char, playerHp) {
   // unowned store guns first — buying unlocks the weapon slot
   for (const w of WEAPON_ORDER) {
     if (char.ownedWeapons.includes(w)) continue;
+    const descs = {
+      magnum: 'Hand cannon — pierces 3 zombies per shot [5]',
+      minigun: 'Bullet hose — 120-round drum [6]',
+      flak: 'Wall of shrapnel — 12 pellets per blast [7]',
+      railgun: 'Pierces an entire horde in a straight line [8]',
+    };
     items.push({
       id: 'buy-' + w,
       name: `★ BUY ${WEAPONS[w].name}`,
-      desc: w === 'magnum' ? 'Hand cannon — pierces 3 zombies per shot [5]' : 'Bullet hose — 120-round drum [6]',
+      desc: descs[w] || 'New weapon',
       cost: WEAPONS[w].price,
       maxed: false,
       buy: (c) => c.ownedWeapons.push(w),

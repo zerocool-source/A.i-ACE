@@ -27,12 +27,22 @@ npm run dev     # open the printed localhost URL, click to enter
 
 ## What's in the game
 
-- **Story campaign, 5 levels** — City Outskirts → Old Harrow Graveyard →
-  The Sewers → St. Mercy Hospital → Quarantine Base Delta. Each has its own
-  generated splash art and ground texture, a typewriter radio briefing from
-  ECHO-6, fog tint, difficulty multipliers, 5 waves, and a boss fight on the
-  final wave (more bosses on later levels). Epilogue + New Game+ after the
-  campaign.
+- **10 playable survivors** — each with permanent attribute bonuses and a
+  favored weapon (+15% damage). Chosen on a roster screen at campaign start.
+- **Squad of four** — a new ally joins after every level: SGT. REYES
+  (rifle DPS), DOC OKAFOR (healing aura + mid-wave revives), CDR. HALE
+  (piercing magnum), "BOOM" OSORIO (grenades into the thickest cluster).
+- **6 zombie types** — walkers, runners, brutes, acid-lobbing Spitters,
+  chain-reacting Exploders, and minion-spawning Bosses.
+- **8 guns** — pistol/rifle/shotgun/SMG free; Magnum, Minigun, Flak Cannon
+  and Railgun sold in the store, all upgradable to MK6.
+- **Loot** — kills can drop medkits, instant-reload ammo, 30s armor shields
+  and 15s rage (x2 damage); brutes and bosses always drop.
+- **Checkpoints** — a save point every 3 waves; death returns you there.
+- **Story campaign, 5 levels x 10 waves** — City Outskirts → Old Harrow
+  Graveyard → The Sewers → St. Mercy Hospital → Quarantine Base Delta, with
+  an opening cinematic, squad-introduction cutscenes between levels, ECHO-6
+  radio briefings, a victory cutscene, epilogue and New Game+.
 - **RPG progression** — kills grant XP; each character level gives 3
   attribute points across STR (damage), AGI (speed/reload), VIT (HP/regen)
   and TECH (crit/Higgs cooldown). Crits, floating damage numbers, armor,

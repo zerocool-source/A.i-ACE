@@ -17,6 +17,16 @@ export const ZOMBIE_TYPES = {
     hp: 3000, speed: 42, damage: 35, radius: 44, score: 500,
     color: '#9c27b0', glow: 'rgba(156,39,176,0.6)',
   },
+  spitter: {
+    hp: 90, speed: 48, damage: 14, radius: 16, score: 25,
+    color: '#cddc39', glow: 'rgba(205,220,57,0.45)',
+    ranged: { range: 330, interval: 2.4, shotSpeed: 420 },
+  },
+  exploder: {
+    hp: 55, speed: 125, damage: 45, radius: 14, score: 30,
+    color: '#ff7043', glow: 'rgba(255,112,67,0.55)',
+    explodes: { radius: 95 },
+  },
 };
 
 export function waveComposition(wave) {
@@ -25,6 +35,8 @@ export function waveComposition(wave) {
   for (let i = 0; i < walkers; i++) list.push('walker');
   if (wave >= 2) for (let i = 0; i < Math.floor(wave * 2); i++) list.push('runner');
   if (wave >= 3) for (let i = 0; i < Math.floor(wave * 0.7); i++) list.push('brute');
+  if (wave >= 4) for (let i = 0; i < Math.floor(wave * 0.5); i++) list.push('spitter');
+  if (wave >= 5) for (let i = 0; i < Math.floor(wave * 0.45); i++) list.push('exploder');
   return list;
 }
 
@@ -49,5 +61,9 @@ export function spawnZombie(type, w, h) {
     wobble: Math.random() * Math.PI * 2,
     groanTimer: 1 + Math.random() * 6,
     minionTimer: 4,      // boss only
+    spitTimer: 1 + Math.random() * 2, // spitter only
+    flash: 0,            // white hit-flash timer
+    ranged: def.ranged || null,
+    explodes: def.explodes || null,
   };
 }

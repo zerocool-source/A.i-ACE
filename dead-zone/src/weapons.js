@@ -32,7 +32,17 @@ export const WEAPONS = {
     fireInterval: 0.045, reloadTime: 3.2, spread: 0.13, pellets: 1,
     bulletSpeed: 1100, color: '#b9f6ca', pierce: 1, price: 900,
   },
+  flak: {
+    name: 'FLAK CANNON', key: '7', auto: false, damage: 16, magSize: 8,
+    fireInterval: 0.8, reloadTime: 2.4, spread: 0.3, pellets: 12,
+    bulletSpeed: 900, color: '#ffab91', pierce: 1, price: 700,
+  },
+  railgun: {
+    name: 'RAILGUN', key: '8', auto: false, damage: 220, magSize: 4,
+    fireInterval: 0.9, reloadTime: 2.6, spread: 0, pellets: 1,
+    bulletSpeed: 2400, color: '#80d8ff', pierce: 99, price: 1200,
+  },
 };
 
-export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun'];
+export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun'];
 export const STARTING_WEAPONS = ['pistol', 'rifle', 'shotgun', 'smg'];

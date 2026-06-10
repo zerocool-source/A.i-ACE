@@ -9,7 +9,7 @@ export const LEVELS = [
     ground: '/sprites/ground.png',
     intro: '/levels/city-intro.png',
     tint: null,
-    waves: 8,
+    waves: 10,
     hpMult: 1.0,
     speedMult: 1.0,
     countMult: 1.0,
@@ -31,7 +31,7 @@ export const LEVELS = [
     ground: '/levels/graveyard-ground.png',
     intro: '/levels/graveyard-intro.png',
     tint: 'rgba(40, 80, 40, 0.10)',
-    waves: 8,
+    waves: 10,
     hpMult: 1.2,
     speedMult: 1.0,
     countMult: 1.25,
@@ -53,7 +53,7 @@ export const LEVELS = [
     ground: '/levels/sewer-ground.png',
     intro: '/levels/sewer-intro.png',
     tint: 'rgba(30, 70, 30, 0.14)',
-    waves: 8,
+    waves: 10,
     hpMult: 1.35,
     speedMult: 1.2,
     countMult: 1.25,
@@ -74,7 +74,7 @@ export const LEVELS = [
     ground: '/levels/hospital-ground.png',
     intro: '/levels/hospital-intro.png',
     tint: 'rgba(120, 140, 160, 0.08)',
-    waves: 8,
+    waves: 10,
     hpMult: 1.6,
     speedMult: 1.25,
     countMult: 1.5,
@@ -96,7 +96,7 @@ export const LEVELS = [
     ground: '/levels/base-ground.png',
     intro: '/levels/base-intro.png',
     tint: 'rgba(160, 30, 30, 0.10)',
-    waves: 8,
+    waves: 10,
     hpMult: 2.0,
     speedMult: 1.35,
     countMult: 1.75,
@@ -114,6 +114,42 @@ export const LEVELS = [
 ];
 
 export const VICTORY_ART = '/levels/victory.png';
+
+// Short story cutscenes played when deploying into each level (index = level
+// reached). Each introduces the squadmate who joins there and pushes the plot.
+export const PRE_CUTSCENES = {
+  1: [
+    { img: 'levels/city-intro.png', duration: 6, zoomFrom: 1.15, zoomTo: 1.0,
+      lines: ['A soldier crawls out of a wrecked APC at the city limits.', 'SGT. REYES: "My whole unit\'s gone. I\'m coming with you."'] },
+    { img: 'levels/graveyard-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.15,
+      lines: ['ECHO-6: "Two heartbeats now. Good. You\'ll need each other where you\'re going."'] },
+  ],
+  2: [
+    { img: 'levels/graveyard-intro.png', duration: 6, zoomFrom: 1.1, zoomTo: 1.0,
+      lines: ['You find a field clinic in the chapel ruins. One doctor, still working.', 'DOC OKAFOR: "I\'ve buried enough patients. Let me keep some alive."'] },
+    { img: 'levels/sewer-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.12,
+      lines: ['She packs her kit. The way down into the dark is open.'] },
+  ],
+  3: [
+    { img: 'levels/sewer-intro.png', duration: 6, zoomFrom: 1.12, zoomTo: 1.0,
+      lines: ['A magnum echoes through the tunnels. Someone is still fighting down here.', 'CDR. HALE: "I held this junction for nine days. About time command sent somebody."'] },
+    { img: 'levels/hospital-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.12,
+      lines: ['ECHO-6: "Hale?! She\'s alive? Then you actually have a chance at St. Mercy."'] },
+  ],
+  4: [
+    { img: 'levels/hospital-intro.png', duration: 6, zoomFrom: 1.1, zoomTo: 1.0,
+      lines: ['In the hospital armory, a man in bomb-squad plate guards the records.', '"BOOM" OSORIO: "You reading those files? Then I\'m blowing you a path to Delta."'] },
+    { img: 'levels/base-intro.png', duration: 7, zoomFrom: 1.0, zoomTo: 1.18,
+      lines: ['Four of you now. One nest left.', 'ECHO-6: "Whatever happens at Delta... it was an honor."'] },
+  ],
+};
+
+export const VICTORY_SHOTS = [
+  { img: 'levels/base-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.2,
+    lines: ['The nest screams once. Then nothing.', 'The boils stop glowing. The horde just... stops.'] },
+  { img: 'levels/victory.png', duration: 7, zoomFrom: 1.2, zoomTo: 1.0,
+    lines: ['ECHO-6: "...I can see you on the wall cam. All four of you."', '"Survivors of the Dead Zone — the sun\'s coming up."'] },
+];
 
 export const EPILOGUE = [
   'The nest is ash.',
