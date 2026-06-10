@@ -7,6 +7,7 @@ import {
   shopCatalog, saveCharacter, loadCharacter, wipeSave,
 } from './rpg.js';
 import * as sfx from './audio.js';
+import { asset } from './assets.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -36,7 +37,7 @@ function getImage(url) {
   if (!IMAGE_CACHE.has(url)) {
     const entry = { img: null };
     const img = new Image();
-    img.src = url;
+    img.src = asset(url);
     img.onload = () => (entry.img = img);
     IMAGE_CACHE.set(url, entry);
   }
@@ -77,7 +78,7 @@ function trimToAlphaBounds(img) {
 
 for (const name of ['player', 'walker', 'runner', 'brute', 'boss']) {
   const img = new Image();
-  img.src = `/sprites/${name}.png`;
+  img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
     SPRITES[name] = trimToAlphaBounds(img);
   };
@@ -90,7 +91,7 @@ function drawSprite(sp, size) {
 }
 
 const titleArt = new Image();
-titleArt.src = '/title-bg.png';
+titleArt.src = asset('title-bg.png');
 
 // ---- state -----------------------------------------------------------------
 

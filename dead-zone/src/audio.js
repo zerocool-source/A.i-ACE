@@ -2,6 +2,7 @@
 // If you drop mp3s into public/audio/ and list them in public/audio/playlist.json
 // (e.g. ["dead_sector.mp3", "grave_circuit.mp3"]), the real DEAD ZONE soundtrack
 // plays instead of the procedural ambient loop.
+import { asset } from './assets.js';
 
 let ctx = null;
 let master = null;
@@ -289,7 +290,7 @@ export function playGameOverSting() {
 
 async function tryLoadPlaylist() {
   try {
-    const res = await fetch('/audio/playlist.json');
+    const res = await fetch(asset('audio/playlist.json'));
     if (!res.ok) return null;
     const list = await res.json();
     return Array.isArray(list) && list.length ? list : null;
@@ -302,7 +303,7 @@ function playNextTrack() {
   if (!playlist || !playlist.length) return;
   const file = playlist[playlistIndex % playlist.length];
   playlistIndex++;
-  musicEl = new Audio('/audio/' + file);
+  musicEl = new Audio(asset('audio/' + file));
   musicEl.volume = 0.4;
   musicEl.addEventListener('ended', playNextTrack);
   musicEl.play().catch(() => {});
