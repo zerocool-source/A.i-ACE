@@ -299,19 +299,28 @@ function stampDecal(x, y, r) {
 function drawGround() {
   ctx.fillStyle = '#0b0d0e';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-  ctx.lineWidth = 1;
-  const grid = 64;
-  ctx.beginPath();
-  for (let x = 0; x < canvas.width; x += grid) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height);
+  if (SPRITES.ground) {
+    ctx.globalAlpha = 0.35;
+    const tile = 256;
+    for (let x = 0; x < canvas.width; x += tile)
+      for (let y = 0; y < canvas.height; y += tile)
+        ctx.drawImage(SPRITES.ground, x, y, tile, tile);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.lineWidth = 1;
+    const grid = 64;
+    ctx.beginPath();
+    for (let x = 0; x < canvas.width; x += grid) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+    }
+    for (let y = 0; y < canvas.height; y += grid) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+    }
+    ctx.stroke();
   }
-  for (let y = 0; y < canvas.height; y += grid) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
-  }
-  ctx.stroke();
   ctx.drawImage(decalCanvas, 0, 0);
 }
 
@@ -327,31 +336,40 @@ function drawZombie(z) {
   ctx.beginPath();
   ctx.arc(0, 0, z.radius * 2.2, 0, Math.PI * 2);
   ctx.fill();
-  // body
-  ctx.fillStyle = z.color;
-  ctx.beginPath();
-  ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
-  ctx.fill();
-  // arms reaching toward player
   const a = Math.atan2(game.player.y - z.y, game.player.x - z.x);
-  ctx.strokeStyle = z.color;
-  ctx.lineWidth = Math.max(3, z.radius * 0.25);
-  ctx.lineCap = 'round';
-  for (const off of [-0.5, 0.5]) {
-    const reach = z.radius * 1.5 + Math.sin(z.wobble * 2 + off) * z.radius * 0.3;
+  const sprite = SPRITES[z.type];
+  if (sprite) {
+    // sprites face right; rotate toward the player with a walk-cycle bob
+    ctx.save();
+    ctx.rotate(a + Math.sin(z.wobble * 2) * 0.08);
+    drawSprite(sprite, z.radius * 3.2);
+    ctx.restore();
+  } else {
+    // body
+    ctx.fillStyle = z.color;
     ctx.beginPath();
-    ctx.moveTo(Math.cos(a + off) * z.radius * 0.7, Math.sin(a + off) * z.radius * 0.7);
-    ctx.lineTo(Math.cos(a + off * 0.4) * reach, Math.sin(a + off * 0.4) * reach);
-    ctx.stroke();
+    ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
+    ctx.fill();
+    // arms reaching toward player
+    ctx.strokeStyle = z.color;
+    ctx.lineWidth = Math.max(3, z.radius * 0.25);
+    ctx.lineCap = 'round';
+    for (const off of [-0.5, 0.5]) {
+      const reach = z.radius * 1.5 + Math.sin(z.wobble * 2 + off) * z.radius * 0.3;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a + off) * z.radius * 0.7, Math.sin(a + off) * z.radius * 0.7);
+      ctx.lineTo(Math.cos(a + off * 0.4) * reach, Math.sin(a + off * 0.4) * reach);
+      ctx.stroke();
+    }
+    // eyes
+    ctx.fillStyle = '#fff';
+    const ex = Math.cos(a) * z.radius * 0.45, ey = Math.sin(a) * z.radius * 0.45;
+    const sep = z.radius * 0.35;
+    ctx.beginPath();
+    ctx.arc(ex - Math.sin(a) * sep, ey + Math.cos(a) * sep, z.radius * 0.13, 0, Math.PI * 2);
+    ctx.arc(ex + Math.sin(a) * sep, ey - Math.cos(a) * sep, z.radius * 0.13, 0, Math.PI * 2);
+    ctx.fill();
   }
-  // eyes
-  ctx.fillStyle = '#fff';
-  const ex = Math.cos(a) * z.radius * 0.45, ey = Math.sin(a) * z.radius * 0.45;
-  const sep = z.radius * 0.35;
-  ctx.beginPath();
-  ctx.arc(ex - Math.sin(a) * sep, ey + Math.cos(a) * sep, z.radius * 0.13, 0, Math.PI * 2);
-  ctx.arc(ex + Math.sin(a) * sep, ey - Math.cos(a) * sep, z.radius * 0.13, 0, Math.PI * 2);
-  ctx.fill();
   // higgs slow indicator
   if (slowed) {
     ctx.strokeStyle = 'rgba(100,181,246,0.8)';
@@ -376,14 +394,18 @@ function drawPlayer() {
   ctx.save();
   ctx.translate(p.x, p.y);
   ctx.rotate(p.angle);
-  // body
-  ctx.fillStyle = '#cfd8dc';
-  ctx.beginPath();
-  ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
-  ctx.fill();
-  // gun barrel
-  ctx.fillStyle = '#90a4ae';
-  ctx.fillRect(p.radius - 4, -3, 18, 6);
+  if (SPRITES.player) {
+    drawSprite(SPRITES.player, p.radius * 3.6);
+  } else {
+    // body
+    ctx.fillStyle = '#cfd8dc';
+    ctx.beginPath();
+    ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+    ctx.fill();
+    // gun barrel
+    ctx.fillStyle = '#90a4ae';
+    ctx.fillRect(p.radius - 4, -3, 18, 6);
+  }
   // muzzle flash
   if (p.muzzleFlash > 0) {
     ctx.fillStyle = '#ffe082';
@@ -509,6 +531,52 @@ function drawHUD() {
 // Generated key art; title falls back to procedural rendering until it loads
 const titleArt = new Image();
 titleArt.src = '/title-bg.png';
+
+// Generated top-down sprites (all face right). Every draw call falls back to
+// the procedural shapes until its sprite finishes loading / if it's missing.
+// Generations carry different amounts of empty padding, so each sprite is
+// trimmed to its alpha bounding box once it loads.
+const SPRITES = {};
+
+function trimToAlphaBounds(img) {
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const cc = c.getContext('2d');
+  cc.drawImage(img, 0, 0);
+  const d = cc.getImageData(0, 0, c.width, c.height).data;
+  let minX = c.width, minY = c.height, maxX = -1, maxY = -1;
+  for (let y = 0; y < c.height; y++) {
+    for (let x = 0; x < c.width; x++) {
+      if (d[(y * c.width + x) * 4 + 3] > 8) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX <= minX || maxY <= minY) return c;
+  const t = document.createElement('canvas');
+  t.width = maxX - minX + 1;
+  t.height = maxY - minY + 1;
+  t.getContext('2d').drawImage(c, minX, minY, t.width, t.height, 0, 0, t.width, t.height);
+  return t;
+}
+
+for (const name of ['player', 'walker', 'runner', 'brute', 'boss', 'ground']) {
+  const img = new Image();
+  img.src = `/sprites/${name}.png`;
+  img.onload = () => {
+    SPRITES[name] = name === 'ground' ? img : trimToAlphaBounds(img);
+  };
+}
+
+// draws a trimmed sprite centered at the origin, longest side scaled to `size`
+function drawSprite(sp, size) {
+  const k = size / Math.max(sp.width, sp.height);
+  ctx.drawImage(sp, (-sp.width * k) / 2, (-sp.height * k) / 2, sp.width * k, sp.height * k);
+}
 
 function drawTitle() {
   ctx.fillStyle = '#060608';
