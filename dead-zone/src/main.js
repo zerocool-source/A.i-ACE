@@ -506,12 +506,36 @@ function drawHUD() {
   ctx.restore();
 }
 
+// Generated key art; title falls back to procedural rendering until it loads
+const titleArt = new Image();
+titleArt.src = '/title-bg.png';
+
 function drawTitle() {
   ctx.fillStyle = '#060608';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const cx = canvas.width / 2;
   const cy = canvas.height / 2;
   const t = performance.now() / 1000;
+
+  if (titleArt.complete && titleArt.naturalWidth) {
+    // cover-fit the key art, then overlay controls + prompt
+    const s = Math.max(canvas.width / titleArt.naturalWidth, canvas.height / titleArt.naturalHeight);
+    const w = titleArt.naturalWidth * s;
+    const hgt = titleArt.naturalHeight * s;
+    ctx.drawImage(titleArt, cx - w / 2, cy - hgt / 2, w, hgt);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, canvas.height - 150, canvas.width, 150);
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = '15px monospace';
+    ctx.fillStyle = '#cfcfcf';
+    ctx.fillText('WASD move · SHIFT sprint · MOUSE aim/shoot · 1-4 weapons · R reload · E higgs field', cx, canvas.height - 110);
+    ctx.font = 'bold 24px monospace';
+    ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.4 * Math.sin(t * 3)})`;
+    ctx.fillText('CLICK TO ENTER', cx, canvas.height - 60);
+    ctx.restore();
+    return;
+  }
 
   // drifting fog blobs
   for (let i = 0; i < 6; i++) {
