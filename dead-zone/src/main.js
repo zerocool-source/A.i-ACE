@@ -111,6 +111,88 @@ function enterLevelIntro() {
   briefingStart = performance.now();
 }
 
+// ---- cutscenes -------------------------------------------------------------
+// Ken Burns shots over the generated art with letterbox + typewriter captions.
+// Click advances to the next shot; finishing (or clicking through) calls onDone.
+
+let cutscene = null; // { shots, idx, t, onDone }
+
+const OPENING_SHOTS = [
+  { img: null, duration: 5, lines: ['DAY 0.', 'The infection took the city in six hours.'] },
+  { img: 'levels/city-intro.png', duration: 7, zoomFrom: 1.0, zoomTo: 1.18, lines: ['DAY 1. The evacuation convoys never came back.'] },
+  { img: 'levels/hospital-intro.png', duration: 7, zoomFrom: 1.15, zoomTo: 1.0, lines: ['It started at St. Mercy Hospital.', 'Nobody ever checked out.'] },
+  { img: 'levels/base-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.12, lines: ['DAY 2. The army fell back to Quarantine Base Delta.', 'Then the radio went quiet.'] },
+  { img: 'title-bg.png', duration: 6, zoomFrom: 1.25, zoomTo: 1.0, lines: ['DAY 3. You stopped waiting for rescue.'] },
+];
+
+function startCutscene(shots, onDone) {
+  // preload every shot up front so transitions don't pop
+  for (const s of shots) if (s.img) getImage(s.img);
+  cutscene = { shots, idx: 0, t: 0, onDone };
+  state = 'cutscene';
+}
+
+function advanceCutscene() {
+  cutscene.idx++;
+  cutscene.t = 0;
+  if (cutscene.idx >= cutscene.shots.length) {
+    const done = cutscene.onDone;
+    cutscene = null;
+    done();
+  }
+}
+
+function drawCutscene(dt) {
+  cutscene.t += dt;
+  const shot = cutscene.shots[cutscene.idx];
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const prog = Math.min(1, cutscene.t / shot.duration);
+
+  if (shot.img) {
+    const img = getImage(shot.img);
+    if (img) {
+      const zoom = (shot.zoomFrom ?? 1) + ((shot.zoomTo ?? 1.1) - (shot.zoomFrom ?? 1)) * prog;
+      const s = Math.max(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight) * zoom;
+      const w = img.naturalWidth * s;
+      const h = img.naturalHeight * s;
+      // fade in/out at the shot boundaries
+      const fade = Math.min(1, cutscene.t / 0.8, (shot.duration - cutscene.t) / 0.8);
+      ctx.globalAlpha = Math.max(0, fade);
+      ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // letterbox bars
+  const bar = Math.round(canvas.height * 0.11);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, bar);
+  ctx.fillRect(0, canvas.height - bar, canvas.width, bar);
+
+  // typewriter captions inside the lower bar area
+  let budget = Math.floor(cutscene.t * 40);
+  let yy = canvas.height - bar + 18;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = '17px monospace';
+  for (const line of shot.lines) {
+    if (budget <= 0) break;
+    ctx.fillStyle = '#e0e0e0';
+    ctx.fillText(line.slice(0, budget), canvas.width / 2, yy);
+    budget -= line.length;
+    yy += 24;
+  }
+  ctx.textAlign = 'right';
+  ctx.font = '12px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillText('click to skip ▸', canvas.width - 20, 12);
+  ctx.restore();
+
+  if (cutscene.t >= shot.duration) advanceCutscene();
+}
+
 // clickable UI regions built during render, consumed at the start of the next frame
 let uiButtons = [];
 function button(x, y, w, h, cb, enabled = true) {
@@ -994,7 +1076,51 @@ function drawTitle() {
   const t = performance.now() / 1000;
 
   if (titleArt.complete && titleArt.naturalWidth) {
-    drawCoverImage(titleArt);
+    // slow Ken Burns breathing zoom
+    const zoom = 1.06 + Math.sin(t * 0.15) * 0.05;
+    const s = Math.max(canvas.width / titleArt.naturalWidth, canvas.height / titleArt.naturalHeight) * zoom;
+    const w = titleArt.naturalWidth * s;
+    const h = titleArt.naturalHeight * s;
+    ctx.drawImage(titleArt, (canvas.width - w) / 2 + Math.sin(t * 0.1) * 18, (canvas.height - h) / 2, w, h);
+
+    // drifting fog
+    for (let i = 0; i < 5; i++) {
+      const fx = ((t * 18 + i * 419) % (canvas.width + 500)) - 250;
+      const fy = cy + Math.sin(t * 0.2 + i * 2.1) * canvas.height * 0.3;
+      const grad = ctx.createRadialGradient(fx, fy, 0, fx, fy, 260);
+      grad.addColorStop(0, 'rgba(20,24,30,0.22)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // occasional red emergency flicker
+    const flicker = Math.sin(t * 1.7) > 0.96 ? 0.08 : 0;
+    if (flicker) {
+      ctx.fillStyle = `rgba(255,23,68,${flicker})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // zombie silhouettes shambling across the bottom
+    if (SPRITES.walker) {
+      ctx.save();
+      ctx.filter = 'brightness(0)';
+      ctx.globalAlpha = 0.85;
+      for (let i = 0; i < 4; i++) {
+        const zx = ((t * (22 + i * 7) + i * 457) % (canvas.width + 240)) - 120;
+        const zy = canvas.height - 195 - (i % 2) * 14;
+        const size = 64 + (i % 3) * 18;
+        ctx.save();
+        ctx.translate(zx, zy);
+        ctx.rotate(Math.sin(t * 4 + i) * 0.05);
+        drawSprite(SPRITES.walker, size);
+        ctx.restore();
+      }
+      ctx.restore();
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+    }
+
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fillRect(0, canvas.height - 170, canvas.width, 170);
     ctx.save();
@@ -1094,6 +1220,7 @@ let lastFrame = performance.now();
 function render(dt) {
   uiButtons = [];
   if (state === 'title') return drawTitle();
+  if (state === 'cutscene') return drawCutscene(dt);
   if (state === 'levelintro') return drawLevelIntro();
   if (state === 'victory') return drawVictory();
   if (state === 'shop') {
@@ -1181,10 +1308,17 @@ function frame(now) {
         state = 'shop';
       } else if (dbg === 'victory') {
         state = 'victory';
+      } else if (!char.seenIntro) {
+        // first ever start: play the opening cinematic
+        char.seenIntro = true;
+        saveCharacter(char);
+        startCutscene(OPENING_SHOTS, enterLevelIntro);
       } else {
         enterLevelIntro();
       }
     }
+  } else if (state === 'cutscene') {
+    if (wasPressed('mouse')) advanceCutscene();
   } else if (state === 'levelintro') {
     if (wasPressed('mouse')) {
       // first click fast-forwards the briefing, the next one deploys
