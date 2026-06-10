@@ -48,14 +48,14 @@ export const ZOMBIE_TYPES = {
 
 export function waveComposition(wave) {
   const list = [];
-  const walkers = 7 + Math.round(wave * 3.5);
+  const walkers = 10 + Math.round(wave * 4.5);
   for (let i = 0; i < walkers; i++) list.push('walker');
-  if (wave >= 2) for (let i = 0; i < Math.floor(wave * 2); i++) list.push('runner');
-  if (wave >= 3) for (let i = 0; i < Math.floor(wave * 0.7); i++) list.push('brute');
-  if (wave >= 3) for (let i = 0; i < Math.floor(wave * 0.8); i++) list.push('crawler');
-  if (wave >= 4) for (let i = 0; i < Math.floor(wave * 0.5); i++) list.push('spitter');
-  if (wave >= 5) for (let i = 0; i < Math.floor(wave * 0.45); i++) list.push('exploder');
-  if (wave >= 6) for (let i = 0; i < Math.max(1, Math.floor(wave * 0.2)); i++) list.push('screamer');
+  if (wave >= 2) for (let i = 0; i < Math.floor(wave * 2.5); i++) list.push('runner');
+  if (wave >= 3) for (let i = 0; i < Math.floor(wave * 0.9); i++) list.push('brute');
+  if (wave >= 3) for (let i = 0; i < Math.floor(wave * 1.2); i++) list.push('crawler');
+  if (wave >= 4) for (let i = 0; i < Math.floor(wave * 0.6); i++) list.push('spitter');
+  if (wave >= 5) for (let i = 0; i < Math.floor(wave * 0.55); i++) list.push('exploder');
+  if (wave >= 6) for (let i = 0; i < Math.max(1, Math.floor(wave * 0.25)); i++) list.push('screamer');
   return list;
 }
 

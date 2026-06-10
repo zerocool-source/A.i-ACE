@@ -338,15 +338,18 @@ function radio(speaker, text, color) {
   if (radioLines.length > 3) radioLines.shift();
 }
 
+const PARTNER_LINES = ['Right behind you.', 'They just keep coming, huh.', 'Watch your six!', 'We make a good team.'];
+
 function squadBanter() {
   const g = game;
-  const pool = [['echo', '#80cbc4']];
-  for (const a of g.allies) if (!a.down) pool.push([a.type, a.color]);
-  const [who, color] = pool[Math.floor(Math.random() * pool.length)];
-  const lines = BANTER[who];
-  const name = who === 'echo' ? '' : ALLY_DEFS[who].name + ': ';
-  const line = lines[Math.floor(Math.random() * lines.length)];
-  radio(who, who === 'echo' ? line : `${name}"${line}"`, color);
+  const pool = [{ name: '', lines: BANTER.echo, color: '#80cbc4', echo: true }];
+  for (const a of g.allies) {
+    if (a.down) continue;
+    pool.push({ name: a.name, lines: BANTER[a.type] || PARTNER_LINES, color: a.color });
+  }
+  const who = pool[Math.floor(Math.random() * pool.length)];
+  const line = who.lines[Math.floor(Math.random() * who.lines.length)];
+  radio(who.name, who.echo ? line : `${who.name}: "${line}"`, who.color);
 }
 
 const ALLY_DEFS = {
@@ -385,6 +388,8 @@ function newGame() {
       muzzleFlash: 0,
       hurtFlash: 0,
       angle: 0,
+      vx: 0, vy: 0,
+      dashT: 0, dashCooldown: 0, invulnUntil: 0,
     },
     zombies: [],
     civilians: [],
@@ -467,6 +472,7 @@ function startLevel() {
   screenBlood = [];
   state = 'playing';
   charSheetOpen = false;
+  Object.assign(cam, cameraTarget()); // snap, don't pan in from the old level
   const joinSubs = {
     soldier: 'sustained rifle fire', medic: 'healing aura — stay close to the cross',
     commander: 'her magnum pierces the horde', demo: 'grenades into the thickest cluster',
@@ -542,7 +548,7 @@ function spawnLevelZombie(type) {
   z.y = Math.max(30, Math.min(g.world.h - 30, g.player.y + Math.sin(a) * r));
   z.hp = z.maxHp = Math.round(z.hp * lv.hpMult);
   z.speed *= lv.speedMult;
-  z.damage = Math.round(z.damage * (1 + char.campaignLevel * 0.2));
+  z.damage = Math.round(z.damage * (1 + char.campaignLevel * 0.25));
   return z;
 }
 
@@ -633,7 +639,7 @@ function explode(x, y, radius, damage, hurtsPlayer) {
   if (hurtsPlayer) {
     const p = g.player;
     const dp = Math.hypot(p.x - x, p.y - y);
-    if (dp < radius + p.radius) {
+    if (dp < radius + p.radius && g.time >= p.invulnUntil) {
       const dmg = Math.max(1, Math.round(damage * 0.4) - effArmor());
       p.hp -= dmg;
       p.hurtFlash = 0.3;
@@ -742,11 +748,41 @@ function update(dt) {
   if (sprinting) p.stamina = Math.max(0, p.stamina - dt / 2.5);
   else p.stamina = Math.min(1, p.stamina + dt / 4);
   const spd = p.speed * d.moveMult * (sprinting ? p.sprintMult : 1);
-  if (moving) {
-    const len = Math.max(1, Math.hypot(dx, dy));
-    p.x += (dx / len) * spd * dt;
-    p.y += (dy / len) * spd * dt;
+
+  // dodge dash: SPACE / Ⓑ — burst of speed with brief invulnerability
+  p.dashCooldown = Math.max(0, p.dashCooldown - dt);
+  if ((wasPressed(' ') || gpPressed('b')) && !charSheetOpen && p.dashCooldown <= 0 && p.stamina > 0.2) {
+    const len = Math.max(0.01, Math.hypot(dx, dy));
+    const ang = moving ? Math.atan2(dy / len, dx / len) : p.angle;
+    p.vx = Math.cos(ang) * spd * 3.1;
+    p.vy = Math.sin(ang) * spd * 3.1;
+    p.dashT = 0.18;
+    p.dashCooldown = 1.5;
+    p.invulnUntil = g.time + 0.35;
+    p.stamina -= 0.2;
+    for (let i = 0; i < 5; i++) {
+      g.particles.push({
+        x: p.x, y: p.y,
+        vx: -Math.cos(ang) * 60 * i, vy: -Math.sin(ang) * 60 * i,
+        life: 0.25, color: 'rgba(207,216,220,0.7)', size: 5,
+      });
+    }
+    sfx.playEmptyClick();
   }
+
+  // acceleration-based movement: snappy but smooth
+  if (p.dashT > 0) {
+    p.dashT -= dt;
+  } else {
+    const accel = 1 - Math.exp(-14 * dt);
+    const len = Math.max(0.01, Math.hypot(dx, dy));
+    const tvx = moving ? (dx / len) * spd : 0;
+    const tvy = moving ? (dy / len) * spd : 0;
+    p.vx += (tvx - p.vx) * accel;
+    p.vy += (tvy - p.vy) * accel;
+  }
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
   p.x = Math.max(p.radius, Math.min(g.world.w - p.radius, p.x));
   p.y = Math.max(p.radius, Math.min(g.world.h - p.radius, p.y));
   collideProps(p);
@@ -848,12 +884,12 @@ function update(dt) {
   if (g.spawnQueue.length) {
     g.spawnTimer -= dt;
     if (g.spawnTimer <= 0) {
-      // later waves dump zombies in pairs to keep the pressure up
-      const burst = 1 + (g.wave > 3 ? 1 : 0);
+      // pressure ramps: pairs early, triples from wave 6
+      const burst = 1 + (g.wave > 2 ? 1 : 0) + (g.wave > 6 ? 1 : 0);
       for (let i = 0; i < burst && g.spawnQueue.length; i++) {
         g.zombies.push(spawnLevelZombie(g.spawnQueue.shift()));
       }
-      g.spawnTimer = Math.max(0.22, 1.3 - (char.campaignLevel * lv.waves + g.wave) * 0.05);
+      g.spawnTimer = Math.max(0.18, 1.2 - (char.campaignLevel * lv.waves + g.wave) * 0.05);
     }
   } else if (!g.zombies.length) {
     if (g.wave >= lv.waves) {
@@ -927,6 +963,7 @@ function update(dt) {
     if (distT < z.radius + (target.radius ?? 14) + 4 && z.attackCooldown <= 0) {
       z.attackCooldown = 0.8;
       if (target === p) {
+        if (g.time < p.invulnUntil) continue; // dash i-frames
         const dmg = Math.max(1, z.damage - effArmor());
         p.hp -= dmg;
         p.hurtFlash = 0.25;
@@ -1105,7 +1142,7 @@ function update(dt) {
       s.life = 0;
       continue;
     }
-    if (Math.hypot(p.x - s.x, p.y - s.y) < p.radius + 6) {
+    if (Math.hypot(p.x - s.x, p.y - s.y) < p.radius + 6 && g.time >= p.invulnUntil) {
       const dmg = Math.max(1, s.damage - effArmor());
       p.hp -= dmg;
       p.hurtFlash = 0.2;
@@ -1326,12 +1363,23 @@ function killZombie(z, dirAngle) {
 
 // ---- render: world -------------------------------------------------------------
 
-function updateCamera() {
+function cameraTarget() {
   const g = game;
-  cam.x = Math.max(0, Math.min(g.world.w - canvas.width, g.player.x - canvas.width / 2));
-  cam.y = Math.max(0, Math.min(g.world.h - canvas.height, g.player.y - canvas.height / 2));
-  if (g.world.w < canvas.width) cam.x = (g.world.w - canvas.width) / 2;
-  if (g.world.h < canvas.height) cam.y = (g.world.h - canvas.height) / 2;
+  const p = g.player;
+  // lead the camera a touch toward where you're aiming
+  const tx = p.x + Math.cos(p.angle) * 70 - canvas.width / 2;
+  const ty = p.y + Math.sin(p.angle) * 70 - canvas.height / 2;
+  return {
+    x: g.world.w < canvas.width ? (g.world.w - canvas.width) / 2 : Math.max(0, Math.min(g.world.w - canvas.width, tx)),
+    y: g.world.h < canvas.height ? (g.world.h - canvas.height) / 2 : Math.max(0, Math.min(g.world.h - canvas.height, ty)),
+  };
+}
+
+function updateCamera(dt) {
+  const t = cameraTarget();
+  const k = 1 - Math.exp(-8 * (dt || 1 / 60));
+  cam.x += (t.x - cam.x) * k;
+  cam.y += (t.y - cam.y) * k;
 }
 
 function drawCoverImage(img, alpha = 1) {
@@ -1838,7 +1886,10 @@ function drawHUD() {
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
   const keys = ownedList().map((w) => `[${WEAPONS[w].key}]${WEAPONS[w].name}`).join(' ');
-  ctx.fillText(`${keys}  [R]RELOAD [TAB]CHAR`, canvas.width - 24, canvas.height - 40);
+  ctx.fillText(`${keys}  [R]RELOAD [SPACE]DASH [TAB]CHAR`, canvas.width - 24, canvas.height - 40);
+  // dash cooldown pip
+  ctx.fillStyle = p.dashCooldown <= 0 ? '#80cbc4' : '#37474f';
+  ctx.fillText(p.dashCooldown <= 0 ? 'DASH READY' : `DASH ${p.dashCooldown.toFixed(1)}s`, canvas.width - 24, canvas.height - 112);
   if (gamepad.connected) {
     ctx.fillStyle = '#80cbc4';
     ctx.fillText('🎮 controller connected — LS move · RS aim · RT fire · LB/RB weapons · Ⓧ reload · Ⓨ higgs', canvas.width - 24, canvas.height - 22);
@@ -2420,7 +2471,7 @@ function render(dt) {
     return;
   }
 
-  updateCamera();
+  updateCamera(dt);
   ctx.save();
   ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
   drawGround();
@@ -2584,10 +2635,16 @@ function handleClicks() {
   return false;
 }
 
+let wasGpConnected = false;
+
 function frame(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
   pollGamepad();
+  if (gamepad.connected && !wasGpConnected) {
+    banner('🎮 CONTROLLER CONNECTED', 'LS move · RS aim · RT fire · LT sprint · Ⓑ dash · Ⓧ reload · Ⓨ higgs', '#80cbc4');
+  }
+  wasGpConnected = gamepad.connected;
 
   // gamepad UI focus: d-pad browses buttons laid out last frame, A activates
   const uiState = charSheetOpen || state === 'shop' || state === 'charselect';
