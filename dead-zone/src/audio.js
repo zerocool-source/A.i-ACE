@@ -36,9 +36,40 @@ function noiseBuffer(seconds) {
 
 // ---- SFX --------------------------------------------------------------
 
+// the real DEAD ZONE gunshot sample, pitched per weapon; synth fallback below
+let gunshotBuf = null;
+let gunshotTried = false;
+async function loadGunshotSample() {
+  gunshotTried = true;
+  try {
+    const res = await fetch(asset('audio/DEAD_ZONE_SOUNDTRACK/gunshot.mp3'));
+    if (!res.ok) return;
+    const data = await res.arrayBuffer();
+    gunshotBuf = await ac().decodeAudioData(data);
+  } catch {
+    /* keep synth gunshots */
+  }
+}
+
+const GUNSHOT_RATES = {
+  pistol: 1.0, rifle: 1.15, shotgun: 0.7, smg: 1.45,
+  magnum: 0.82, minigun: 1.3, flak: 0.62, railgun: 0.5,
+};
+
 export function playGunshot(weapon) {
   const c = ac();
   const t = c.currentTime;
+  if (!gunshotTried) loadGunshotSample();
+  if (gunshotBuf) {
+    const src = c.createBufferSource();
+    src.buffer = gunshotBuf;
+    src.playbackRate.value = (GUNSHOT_RATES[weapon] ?? 1) * (0.95 + Math.random() * 0.1);
+    const g = c.createGain();
+    g.gain.value = weapon === 'smg' || weapon === 'minigun' ? 0.35 : 0.55;
+    src.connect(g).connect(master);
+    src.start(t);
+    return;
+  }
   // per-weapon character: shotgun deep boom, smg fast snap
   const profile = {
     pistol: { cutoff: 2200, dur: 0.16, vol: 0.5 },

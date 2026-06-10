@@ -75,7 +75,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'hero_medic', 'hero_builder', 'hero_hacker', 'hero_cop', 'hero_biker',
                     'hero_engineer', 'hero_veteran', 'hero_athlete',
                     'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder',
-                    'crawler', 'screamer', 'rogue']) {
+                    'crawler', 'screamer', 'rogue', 'cache', 'wreck', 'statue']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -102,7 +102,9 @@ titleArt.src = asset('title-bg.png');
 // ---- state -----------------------------------------------------------------
 
 const HIGGS = { radius: 190, slowFactor: 0.25, slowDuration: 5, knockback: 420 };
-const WORLD_BASE = { w: 2400, h: 1650 };
+const WORLD_BASE = { w: 3400, h: 2300 };
+// blood decals render at half resolution so huge worlds stay light on memory
+const DECAL_SCALE = 0.5;
 
 let state = 'title'; // title | charselect | cutscene | levelintro | playing | shop | gameover | victory
 let char = loadCharacter();
@@ -226,6 +228,8 @@ function banner(text, sub, color = '#d32f2f') {
 function placeProps(lv, world) {
   const props = [];
   const cx = world.w / 2, cy = world.h / 2;
+  // prop counts scale with map area so huge maps stay dense
+  const af = Math.min(3, (world.w * world.h) / (2400 * 1650));
   const fits = (x, y, w, h) => {
     if (x < 20 || y < 20 || x + w > world.w - 20 || y + h > world.h - 20) return false;
     // keep the spawn area clear
@@ -235,7 +239,8 @@ function placeProps(lv, world) {
     }
     return true;
   };
-  const scatter = (n, wMin, wMax, hMin, hMax, kind, low) => {
+  const scatter = (n0, wMin, wMax, hMin, hMax, kind, low) => {
+    const n = Math.round(n0 * af);
     for (let i = 0, tries = 0; i < n && tries < n * 30; tries++) {
       const w = wMin + Math.random() * (wMax - wMin);
       const h = hMin + Math.random() * (hMax - hMin);
@@ -248,7 +253,8 @@ function placeProps(lv, world) {
     }
   };
   // apartment blocks / large structures hug the edges
-  const edgeBlocks = (n, kind, bw, bh) => {
+  const edgeBlocks = (n0, kind, bw, bh) => {
+    const n = Math.round(n0 * af);
     for (let i = 0, tries = 0; i < n && tries < n * 40; tries++) {
       const side = Math.floor(Math.random() * 4);
       const w = bw * (0.7 + Math.random() * 0.6);
@@ -290,6 +296,9 @@ function placeProps(lv, world) {
       scatter(12, 40, 56, 40, 56, 'crate', true);
       break;
   }
+  // one big landmark set-piece per map
+  if (lv.key === 'city' || lv.key === 'base') scatter(1 / af, 220, 260, 130, 160, 'wreck');
+  if (lv.key === 'graveyard') scatter(1 / af, 120, 140, 120, 140, 'statue');
   return props;
 }
 
@@ -339,6 +348,15 @@ function radio(speaker, text, color) {
 }
 
 const PARTNER_LINES = ['Right behind you.', 'They just keep coming, huh.', 'Watch your six!', 'We make a good team.'];
+
+// lore drops from secret caches, per level
+const CACHE_LORE = {
+  city: ['ECHO-6: "That stash... evac teams left those for survivors. Most never got opened."', 'ECHO-6: "Supply drop marker. Day one they thought this would be over in a week."'],
+  graveyard: ['ECHO-6: "Gravediggers\' kit. They were burying the bitten before anyone said the word \'zombie\'."', 'ECHO-6: "Someone was living out there between the crypts. Hope they made it."'],
+  sewer: ['ECHO-6: "Maintenance crews stashed gear down there when the tunnels were still safe."', 'ECHO-6: "That\'s a smuggler cache. The sewers were a highway before the runners moved in."'],
+  hospital: ['ECHO-6: "Med supplies. St. Mercy staff hid them from the panic looting."', 'ECHO-6: "A nurse\'s go-bag. They stayed. All of them stayed."'],
+  base: ['ECHO-6: "Delta\'s last requisitions. They never got to use them."', 'ECHO-6: "Hale\'s unit hid ammo dumps before the wall fell. She\'ll be glad you found one."'],
+};
 
 function squadBanter() {
   const g = game;
@@ -390,6 +408,7 @@ function newGame() {
       angle: 0,
       vx: 0, vy: 0,
       dashT: 0, dashCooldown: 0, invulnUntil: 0,
+      walkPhase: 0, stepAcc: 0,
     },
     zombies: [],
     civilians: [],
@@ -407,8 +426,20 @@ function newGame() {
     buffs: { rage: 0, shield: 0 }, // seconds remaining
     higgs: { charge: 1, activeUntil: 0, ringT: -1 },
     props: placeProps(lv, world),
+    caches: [],
     rogueBannerShown: false,
   };
+  // hidden supply caches tucked far from the spawn — explore to find them
+  for (let i = 0; i < 3; i++) {
+    let x, y, tries = 0;
+    do {
+      x = 120 + Math.random() * (world.w - 240);
+      y = 120 + Math.random() * (world.h - 240);
+      tries++;
+    } while (Math.hypot(x - world.w / 2, y - world.h / 2) < 700 && tries < 40);
+    const cache = { x, y, radius: 16, taken: false, pulse: Math.random() * Math.PI * 2 };
+    g.caches.push(cache);
+  }
   // civilians scattered around the map, fleeing for their lives
   for (let i = 0; i < lv.civilians; i++) {
     g.civilians.push({
@@ -466,9 +497,10 @@ function makeAlly(type, world) {
 function startLevel() {
   game = newGame();
   decalCanvas = document.createElement('canvas');
-  decalCanvas.width = game.world.w;
-  decalCanvas.height = game.world.h;
+  decalCanvas.width = Math.ceil(game.world.w * DECAL_SCALE);
+  decalCanvas.height = Math.ceil(game.world.h * DECAL_SCALE);
   decalCtx = decalCanvas.getContext('2d');
+  decalCtx.scale(DECAL_SCALE, DECAL_SCALE);
   screenBlood = [];
   state = 'playing';
   charSheetOpen = false;
@@ -787,6 +819,19 @@ function update(dt) {
   p.y = Math.max(p.radius, Math.min(g.world.h - p.radius, p.y));
   collideProps(p);
 
+  // walk cycle + footstep dust, driven by real velocity
+  const speedMag = Math.hypot(p.vx, p.vy);
+  p.walkPhase += speedMag * dt * 0.05;
+  p.stepAcc += speedMag * dt;
+  if (p.stepAcc > 85 && speedMag > 40) {
+    p.stepAcc = 0;
+    g.particles.push({
+      x: p.x - (p.vx / speedMag) * 10, y: p.y - (p.vy / speedMag) * 10,
+      vx: (Math.random() - 0.5) * 30, vy: (Math.random() - 0.5) * 30,
+      life: 0.35, color: 'rgba(160,160,150,0.4)', size: 4,
+    });
+  }
+
   // -- aim: right stick wins, otherwise mouse (in world space)
   if (gamepad.aiming) {
     p.angle = Math.atan2(gamepad.aimY, gamepad.aimX);
@@ -1085,6 +1130,7 @@ function update(dt) {
     if (dp > 170) {
       a.x += ((p.x - a.x) / dp) * 200 * dt;
       a.y += ((p.y - a.y) / dp) * 200 * dt;
+      a.walkPhase = (a.walkPhase || 0) + 200 * dt * 0.05;
     }
     collideProps(a);
     let nz = null, nd = 1e9;
@@ -1167,6 +1213,25 @@ function update(dt) {
   // -- explosions animate
   for (const ex of g.explosions) ex.t -= dt;
   g.explosions = g.explosions.filter((ex) => ex.t > 0);
+
+  // -- secret caches
+  for (const ca of g.caches) {
+    if (ca.taken) continue;
+    collideProps(ca);
+    if (Math.hypot(p.x - ca.x, p.y - ca.y) < p.radius + ca.radius + 6) {
+      ca.taken = true;
+      const reward = 150 + char.campaignLevel * 100;
+      char.scrap += reward;
+      char.secretsFound = (char.secretsFound || 0) + 1;
+      saveCharacter(char);
+      dropLoot(ca.x + 20, ca.y, true);
+      dropLoot(ca.x - 20, ca.y, true);
+      banner('SECRET CACHE FOUND', `+${reward} scrap`, '#ffd54f');
+      const lore = CACHE_LORE[level().key];
+      if (lore) radio('echo', lore[(char.secretsFound - 1) % lore.length], '#80cbc4');
+      sfx.playFanfare();
+    }
+  }
 
   // -- loot pickups
   for (const pk of g.pickups) {
@@ -1422,7 +1487,7 @@ function drawGround() {
   ctx.strokeStyle = 'rgba(229,57,53,0.25)';
   ctx.lineWidth = 4;
   ctx.strokeRect(2, 2, g.world.w - 4, g.world.h - 4);
-  ctx.drawImage(decalCanvas, 0, 0);
+  ctx.drawImage(decalCanvas, 0, 0, g.world.w, g.world.h);
   drawProps();
 }
 
@@ -1438,7 +1503,18 @@ function drawProps() {
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(pr.x + 7, pr.y + 9, pr.w, pr.h);
     }
-    if (pr.kind === 'building' || pr.kind === 'crypt' || pr.kind === 'bunker') {
+    if (pr.kind === 'wreck' || pr.kind === 'statue') {
+      const sp = SPRITES[pr.kind];
+      if (sp) {
+        ctx.save();
+        ctx.translate(pr.x + pr.w / 2, pr.y + pr.h / 2);
+        drawSpriteFit(sp, pr.w * 1.25, pr.h * 1.25);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = pr.kind === 'wreck' ? '#2e2a26' : '#3c4038';
+        ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      }
+    } else if (pr.kind === 'building' || pr.kind === 'crypt' || pr.kind === 'bunker') {
       const body = { building: '#181c23', crypt: '#262b26', bunker: '#22281f' }[pr.kind];
       const edge = { building: '#39424e', crypt: '#3e463e', bunker: '#3c4434' }[pr.kind];
       ctx.fillStyle = body;
@@ -1556,7 +1632,9 @@ function drawZombie(z) {
   const sprite = SPRITES[z.type];
   if (sprite) {
     ctx.save();
-    ctx.rotate(a + Math.sin(z.wobble * 2) * 0.08);
+    ctx.rotate(a + Math.sin(z.wobble * 2) * 0.09);
+    const zsq = Math.sin(z.wobble * 4) * 0.04;
+    ctx.scale(1 + zsq, 1 - zsq);
     drawSprite(sprite, z.radius * 3.2);
     ctx.restore();
   } else {
@@ -1591,7 +1669,9 @@ function drawZombie(z) {
 function drawCivilian(c) {
   ctx.save();
   ctx.translate(c.x, c.y);
-  ctx.rotate(c.angle + Math.sin(c.wobble * 2) * 0.1);
+  ctx.rotate(c.angle + Math.sin(c.wobble * 2.4) * 0.16);
+  const sq = Math.sin(c.wobble * 4.8) * 0.04;
+  ctx.scale(1 + sq, 1 - sq);
   const sprite = SPRITES[c.sprite];
   if (sprite) drawSprite(sprite, c.radius * 3.0);
   else {
@@ -1626,7 +1706,9 @@ function drawAlly(a) {
     ctx.restore();
     return;
   }
-  ctx.rotate(a.angle);
+  ctx.rotate(a.angle + Math.sin(a.walkPhase || 0) * 0.07);
+  const sq = Math.sin((a.walkPhase || 0) * 2) * 0.03;
+  ctx.scale(1 + sq, 1 - sq);
   const sprite = SPRITES[a.sprite || a.type];
   if (sprite) drawSprite(sprite, a.radius * 3.4);
   else {
@@ -1655,7 +1737,12 @@ function drawPlayer() {
   const p = game.player;
   ctx.save();
   ctx.translate(p.x, p.y);
-  ctx.rotate(p.angle);
+  // gait: rock around the aim axis + squash-stretch step bounce
+  const rock = Math.sin(p.walkPhase) * 0.07;
+  const squish = Math.sin(p.walkPhase * 2) * 0.035;
+  ctx.rotate(p.angle + rock);
+  ctx.scale(1 + squish, 1 - squish);
+  if (game.time < p.invulnUntil) ctx.globalAlpha = 0.55; // dash ghosting
   const sprite = SPRITES[heroById(char.heroId).sprite] || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
   if (sprite) {
     drawSprite(sprite, p.radius * 3.6);
@@ -1710,6 +1797,36 @@ function drawHiggs() {
     ctx.beginPath();
     ctx.arc(p.x, p.y, HIGGS.radius * (0.3 + t * 1.3), 0, Math.PI * 2);
     ctx.stroke();
+  }
+}
+
+function drawCaches() {
+  const p = game.player;
+  for (const ca of game.caches) {
+    if (ca.taken) continue;
+    // secrets only shimmer into view when you're close
+    const d = Math.hypot(p.x - ca.x, p.y - ca.y);
+    if (d > 460) continue;
+    const t = performance.now() / 1000;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 3 + ca.pulse);
+    const grad = ctx.createRadialGradient(ca.x, ca.y, 4, ca.x, ca.y, 46 + pulse * 14);
+    grad.addColorStop(0, `rgba(255,213,79,${0.35 * pulse + 0.15})`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(ca.x, ca.y, 60, 0, Math.PI * 2);
+    ctx.fill();
+    if (SPRITES.cache) {
+      ctx.save();
+      ctx.translate(ca.x, ca.y);
+      drawSpriteFit(SPRITES.cache, 44, 44);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#8d6e2f';
+      ctx.fillRect(ca.x - 14, ca.y - 11, 28, 22);
+      ctx.strokeStyle = '#ffd54f';
+      ctx.strokeRect(ca.x - 14, ca.y - 11, 28, 22);
+    }
   }
 }
 
@@ -2477,6 +2594,7 @@ function render(dt) {
   drawGround();
   for (const co of game.corpses) drawCorpse(co);
   drawHiggs();
+  drawCaches();
   drawScraps();
   for (const c of game.civilians) drawCivilian(c);
   for (const a of game.allies) drawAlly(a);
