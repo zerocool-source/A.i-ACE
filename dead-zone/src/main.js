@@ -106,7 +106,11 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'crane', 'helipad', 'acunit', 'mausoleum', 'tank', 'tent',
                     'sewergrate', 'waterpool',
                     'killx3', 'bomber', 'flamecone', 'flamering', 'energyring',
-                    'slashfx', 'roof1', 'roof2', 'roof3', 'roof4']) {
+                    'slashfx', 'roof1', 'roof2', 'roof3', 'roof4',
+                    ...['player', 'player_f', 'hero_medic', 'hero_builder',
+                        'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
+                        'hero_veteran', 'hero_athlete',
+                    ].flatMap((b) => [`${b}_s0`, `${b}_s1`, `${b}_s2`, `${b}_s3`])]) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   spritesTotal++;
@@ -136,21 +140,34 @@ function drawSpriteFit(sp, maxW, maxH) {
 // different bounds, so scaling them individually made walkers pulse in size.
 // Padding every frame onto one shared canvas makes all frames scale identically.
 const animCache = {};
-function animFrames(name) {
-  if (animCache[name]) return animCache[name];
-  const idle = SPRITES[name], walk = SPRITES[name + '_walk'];
-  if (!idle || !walk) return null;
-  const run = SPRITES[name + '_run'];
-  const frames = run ? [idle, walk, run] : [idle, walk];
+function padFrames(frames) {
   const W = Math.max(...frames.map((f) => f.width));
   const H = Math.max(...frames.map((f) => f.height));
-  const pad = frames.map((f) => {
+  return frames.map((f) => {
     const cv = document.createElement('canvas');
     cv.width = W;
     cv.height = H;
     cv.getContext('2d').drawImage(f, (W - f.width) / 2, (H - f.height) / 2);
     return cv;
   });
+}
+function animFrames(name) {
+  if (animCache[name]) return animCache[name];
+  // dedicated 4-pose sheet first: idle / left stride / pass / right stride
+  const sh = [0, 1, 2, 3].map((i) => SPRITES[`${name}_s${i}`]);
+  if (sh.every(Boolean)) {
+    const pd = padFrames(sh);
+    return (animCache[name] = {
+      idle: pd[0],
+      cycleWalk: [pd[1], pd[2], pd[3], pd[2]],
+      cycleRun: [pd[1], pd[2], pd[3], pd[2]],
+    });
+  }
+  const idle = SPRITES[name], walk = SPRITES[name + '_walk'];
+  if (!idle || !walk) return null;
+  const run = SPRITES[name + '_run'];
+  const frames = run ? [idle, walk, run] : [idle, walk];
+  const pad = padFrames(frames);
   // mirror each stride frame across the facing axis: instant opposite-leg
   // poses, turning a 3-frame sheet into a true alternating walk cycle
   const flip = (cv) => {
@@ -165,8 +182,9 @@ function animFrames(name) {
   };
   const runPad = pad[2] || pad[1];
   return (animCache[name] = {
-    idle: pad[0], walk: pad[1], run: runPad,
-    walkB: flip(pad[1]), runB: flip(runPad),
+    idle: pad[0],
+    cycleWalk: [pad[1], pad[0], flip(pad[1]), pad[0]],
+    cycleRun: [pad[1], runPad, flip(pad[1]), flip(runPad)],
   });
 }
 
@@ -1833,7 +1851,23 @@ function update(dt) {
       g.spawnTimer = Math.max(0.18, 1.2 - (char.campaignLevel * lv.waves + g.wave) * 0.05);
     }
   } else if (!g.zombies.length) {
-    if (g.wave >= lv.waves) {
+    if (g.wave < lv.waves && !(g.waveBossDone || {})[g.wave]) {
+      // every wave ends in a BOSS FIGHT — clear it to advance
+      g.waveBossDone = g.waveBossDone || {};
+      g.waveBossDone[g.wave] = true;
+      const names = WAVE_BOSSES[lv.key] || ['THE BRUTE LORD', 'THE BRUTE LORD'];
+      const bn = names[(g.wave - 1) % names.length];
+      const wb = spawnLevelZombie('boss');
+      wb.hp = wb.maxHp = Math.round(wb.maxHp * (0.5 + g.wave * 0.25));
+      wb.radius = Math.round(wb.radius * 1.1);
+      wb.waveBossName = bn;
+      g.zombies.push(wb);
+      for (let i = 0; i < 4 + g.wave * 2; i++) g.zombies.push(spawnLevelZombie(randomZombieType(char.campaignLevel)));
+      banner(`WAVE ${g.wave} BOSS`, bn, '#ff1744');
+      radio('echo', `ECHO-6: "Big contact. That's ${bn}. Put it DOWN."`, '#ff8a80');
+      sfx.playScream();
+      addShake(6);
+    } else if (g.wave >= lv.waves) {
       if (!g.levelClearing) {
         g.levelClearing = true;
         banner('LEVEL CLEARED', `+${lv.scrapBonus} scrap bonus`, '#ffd54f');
@@ -3183,6 +3217,20 @@ function drawZombie(z) {
     ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (z.waveBossName) {
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(z.waveBossName, 0, -z.radius - 22);
+    ctx.fillStyle = '#ff5252';
+    ctx.fillText(z.waveBossName, 0, -z.radius - 22);
+    const bw3 = z.radius * 2.4;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(-bw3 / 2, -z.radius - 16, bw3, 5);
+    ctx.fillStyle = '#ff1744';
+    ctx.fillRect(-bw3 / 2, -z.radius - 16, bw3 * Math.max(0, z.hp / z.maxHp), 5);
+  }
   if (slowed) {
     ctx.strokeStyle = 'rgba(100,181,246,0.8)';
     ctx.lineWidth = 2;
@@ -3242,7 +3290,7 @@ function drawAlly(a) {
     const sprite = SPRITES[a.sprite || a.type];
     if (sprite) {
       ctx.filter = 'brightness(0.5)';
-      drawSprite(sprite, a.radius * 3.2);
+      drawSprite(sprite, a.radius * 3.8);
       ctx.filter = 'none';
     }
     ctx.restore();
@@ -3258,9 +3306,9 @@ function drawAlly(a) {
   a._lastWP = a.walkPhase || 0;
   // ally stride: walkPhase is distance*0.05, so /1.5 ≈ one frame per 30px
   const sprite = aAf
-    ? (aMoving ? [aAf.walk, aAf.idle, aAf.walkB, aAf.idle][Math.floor((a.walkPhase || 0) / 1.5) % 4] : aAf.idle)
+    ? (aMoving ? aAf.cycleWalk[Math.floor((a.walkPhase || 0) / 1.5) % 4] : aAf.idle)
     : SPRITES[aBase];
-  if (sprite) drawSprite(sprite, a.radius * 3.4);
+  if (sprite) drawSprite(sprite, a.radius * 4.2);
   else {
     ctx.fillStyle = a.color;
     ctx.beginPath();
@@ -3342,12 +3390,11 @@ function drawPlayer() {
   if (spd2 > 40 && af) {
     // one pose per ~22px travelled — correct cadence at every speed
     const ph = Math.floor((p.animDist || 0) / 22) % 4;
-    if (spd2 > 300) sprite = [af.walk, af.run, af.walkB, af.runB][ph];
-    else sprite = [af.walk, af.idle, af.walkB, af.idle][ph];
+    sprite = (spd2 > 300 ? af.cycleRun : af.cycleWalk)[ph];
   }
   sprite = sprite || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
   if (sprite) {
-    drawSprite(sprite, p.radius * 3.6);
+    drawSprite(sprite, p.radius * 4.4); // heroes read big on screen
   } else {
     ctx.fillStyle = '#cfd8dc';
     ctx.beginPath();
@@ -3808,66 +3855,115 @@ function drawPanelButton(x, y, w, h, label, sub, cost, enabled, cb) {
 
 function drawCharSheet() {
   const d = derived(char);
-  const w = Math.min(680, view.w - 60);
-  const h = 460;
+  const w = Math.min(780, view.w - 50);
+  const h = Math.min(540, view.h - 30);
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
   ctx.fillRect(0, 0, view.w, view.h);
-  ctx.fillStyle = 'rgba(16,18,22,0.97)';
+  ctx.fillStyle = 'rgba(14,16,20,0.97)';
   ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = '#455a64';
+  ctx.strokeStyle = '#ce93d8';
+  ctx.lineWidth = 1.5;
   ctx.strokeRect(x, y, w, h);
-
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.font = 'bold 24px monospace';
-  ctx.fillStyle = '#ce93d8';
-  ctx.fillText(`${heroById(char.heroId).name} — LEVEL ${char.level}`, x + 24, y + 20);
-  ctx.font = '14px monospace';
-  ctx.fillStyle = '#9e9e9e';
-  ctx.fillText(`XP ${char.xp}/${xpForLevel(char.level)}   SCRAP ${char.scrap}   KILLS ${char.totalKills}`, x + 24, y + 52);
-  ctx.fillStyle = char.unspent > 0 ? '#ffd54f' : '#616161';
-  ctx.fillText(`UNSPENT POINTS: ${char.unspent}`, x + 24, y + 74);
-  // hero portrait anchors the sheet
+  // right column: portrait + derived stats
+  const colW = 220;
+  const rx = x + w - colW;
+  ctx.fillStyle = 'rgba(22,18,28,0.9)';
+  ctx.fillRect(rx, y, colW, h);
   const cport = getImage(`portraits/${char.heroId}.png`);
+  const psz = colW - 36;
   if (cport) {
-    const ps3 = 124;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x + w - ps3 - 22, y + 18, ps3, ps3);
+    ctx.rect(rx + 18, y + 18, psz, psz);
     ctx.clip();
-    ctx.drawImage(cport, x + w - ps3 - 22, y + 18, ps3, ps3);
+    ctx.drawImage(cport, rx + 18, y + 18, psz, psz);
     ctx.restore();
     ctx.strokeStyle = '#ce93d8';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x + w - ps3 - 22, y + 18, ps3, ps3);
+    ctx.strokeRect(rx + 18, y + 18, psz, psz);
   }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(heroById(char.heroId).name, rx + colW / 2, y + psz + 28, colW - 20);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#ce93d8';
+  ctx.fillText(`LEVEL ${char.level} SURVIVOR`, rx + colW / 2, y + psz + 48);
+  // derived stat readout, one per line
+  const dstats = [
+    ['DAMAGE', `x${d.damageMult.toFixed(2)}`], ['SPEED', `x${d.moveMult.toFixed(2)}`],
+    ['MAX HP', `${d.maxHp}`], ['REGEN', `${d.regen.toFixed(1)}/s`],
+    ['CRIT', `${(d.critChance * 100).toFixed(0)}%`], ['HIGGS CD', `${d.higgsCooldown.toFixed(1)}s`],
+    ['ARMOR', `${d.armor}`],
+  ];
+  let dy = y + psz + 74;
+  ctx.font = '13px monospace';
+  for (const [k, v] of dstats) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#78909c';
+    ctx.fillText(k, rx + 20, dy);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#80cbc4';
+    ctx.fillText(v, rx + colW - 20, dy);
+    dy += 21;
+  }
+  // left column: identity + attributes
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`CHARACTER SHEET`, x + 26, y + 20);
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#9e9e9e';
+  ctx.fillText(`XP ${char.xp}/${xpForLevel(char.level)}   ⚙ ${char.scrap}   KILLS ${char.totalKills}`, x + 26, y + 50);
+  // xp progress bar
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(x + 26, y + 70, w - colW - 52, 8);
+  ctx.fillStyle = '#ab47bc';
+  ctx.fillRect(x + 26, y + 70, (w - colW - 52) * Math.min(1, char.xp / xpForLevel(char.level)), 8);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = char.unspent > 0 ? '#ffd54f' : '#616161';
+  ctx.fillText(char.unspent > 0 ? `◆ ${char.unspent} POINTS TO SPEND` : 'NO UNSPENT POINTS', x + 26, y + 86);
 
-  let yy = y + 104;
+  let yy = y + 114;
+  const rowW = w - colW - 52;
   for (const key of Object.keys(ATTRS)) {
     const a = ATTRS[key];
-    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = 'rgba(28,32,40,0.85)';
+    ctx.fillRect(x + 26, yy, rowW, 56);
+    ctx.font = 'bold 15px monospace';
     ctx.fillStyle = '#fff';
-    ctx.fillText(`${a.name}  ${char.attrs[key]}`, x + 24, yy + 8);
-    ctx.font = '12px monospace';
+    ctx.fillText(`${a.name}`, x + 38, yy + 9);
+    // allocation pips make growth readable at a glance
+    const pips = Math.min(20, char.attrs[key]);
+    for (let pi = 0; pi < 20; pi++) {
+      ctx.fillStyle = pi < pips ? '#80cbc4' : 'rgba(255,255,255,0.12)';
+      ctx.fillRect(x + 150 + pi * 9, yy + 12, 6, 10);
+    }
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#80cbc4';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${char.attrs[key]}`, x + 26 + rowW - 64, yy + 9);
+    ctx.textAlign = 'left';
+    ctx.font = '11px monospace';
     ctx.fillStyle = '#90a4ae';
-    ctx.fillText(a.desc, x + 24, yy + 28);
+    ctx.fillText(a.desc, x + 38, yy + 33);
     const canAdd = char.unspent > 0;
-    const bx = x + w - 70;
+    const bx = x + 26 + rowW - 50;
     const idx = uiButtons.length;
     const focused = gamepad.connected && idx === gpFocus;
     ctx.fillStyle = canAdd ? '#2e7d32' : '#1b3a1d';
-    ctx.fillRect(bx, yy, 46, 40);
+    ctx.fillRect(bx, yy + 8, 40, 40);
     if (focused) {
       ctx.strokeStyle = '#ffd54f';
       ctx.lineWidth = 2;
-      ctx.strokeRect(bx, yy, 46, 40);
+      ctx.strokeRect(bx, yy + 8, 40, 40);
     }
     ctx.font = 'bold 24px monospace';
     ctx.fillStyle = canAdd ? '#fff' : '#4a4a4a';
-    ctx.fillText('+', bx + 16, yy + 7);
-    button(bx, yy, 46, 40, () => {
+    ctx.fillText('+', bx + 13, yy + 14);
+    button(bx, yy + 8, 40, 40, () => {
       if (char.unspent > 0) {
         char.attrs[key]++;
         char.unspent--;
@@ -3875,28 +3971,24 @@ function drawCharSheet() {
         saveCharacter(char);
       } else sfx.playDenied();
     }, canAdd);
-    yy += 56;
+    yy += 66;
   }
-
-  ctx.font = '13px monospace';
-  ctx.fillStyle = '#80cbc4';
-  ctx.fillText(
-    `DMG x${d.damageMult.toFixed(2)}  SPD x${d.moveMult.toFixed(2)}  HP ${d.maxHp}  REGEN ${d.regen.toFixed(1)}/s  CRIT ${(d.critChance * 100).toFixed(0)}%  HIGGS ${d.higgsCooldown.toFixed(1)}s  ARMOR ${d.armor}`,
-    x + 24, yy + 6
-  );
-  // special skills readout
+  // special skills, breathing room between lines
+  yy += 4;
   ctx.font = 'bold 13px monospace';
   ctx.fillStyle = '#ffd54f';
-  ctx.fillText('SPECIAL SKILLS', x + 24, yy + 28);
+  ctx.fillText('SPECIAL SKILLS', x + 26, yy);
   ctx.font = '12px monospace';
   ctx.fillStyle = '#cfd8dc';
   const shieldsTxt = char.shields.map((sh) => sh.toUpperCase()).join(' / ');
-  ctx.fillText(`SHIELD CORES: ${shieldsTxt} (active: ${char.shieldType.toUpperCase()}) · DASH [SPACE] · KILLSTREAKS 25/50/75`, x + 24, yy + 46);
-  ctx.fillText(`THROWABLES: FRAG ×${char.nades.frag} · SMOKE ×${char.nades.smoke} · DECOY ×${char.nades.decoy} · DYNAMITE ×${char.dynamite}`, x + 24, yy + 62);
+  ctx.fillText(`SHIELDS: ${shieldsTxt} (active ${char.shieldType.toUpperCase()}) · DASH [SPACE] · STREAKS 25/50/75/100`, x + 26, yy + 20);
+  ctx.fillText(`THROWABLES: FRAG ×${char.nades.frag} · SMOKE ×${char.nades.smoke} · DECOY ×${char.nades.decoy} · DYNAMITE ×${char.dynamite}`, x + 26, yy + 38);
   ctx.fillStyle = '#a5d6a7';
-  ctx.fillText(`HEALTH POINTS: every character level grants +5 max HP (LV ${char.level} = +${(char.level - 1) * 5})`, x + 24, yy + 78);
+  ctx.fillText(`HEALTH POINTS: +5 max HP every level (LV ${char.level} = +${(char.level - 1) * 5})`, x + 26, yy + 56);
+  ctx.textAlign = 'right';
   ctx.fillStyle = '#9e9e9e';
-  ctx.fillText('[TAB/Ⓑ] close', x + 24, y + h - 28);
+  ctx.fillText('[TAB/Ⓑ] close', x + w - colW - 26, y + h - 26);
+  ctx.textAlign = 'left';
 }
 
 function drawShop() {
@@ -3996,6 +4088,20 @@ const MODES = [
   { id: 'die', label: '💀 DIE MODE', desc: '1 HP · 3x scrap' },
   { id: 'tenk', label: '10,000', desc: 'kill every last one' },
 ];
+
+// named mini-bosses cap waves 1 and 2 of every level (the SUPERBOSS owns wave 3)
+const WAVE_BOSSES = {
+  city: ['THE BULLDOZER', 'SIREN EATER'],
+  graveyard: ['THE GRAVE WARDEN', 'MOURNING MOTHER'],
+  sewer: ['THE DROWNED ONE', 'PIPE KING'],
+  hospital: ['HEAD SURGEON', 'THE NIGHT NURSE'],
+  base: ['SGT. SLAUGHTER', 'THE QUARTERMASTER'],
+  mall: ['STORE MANAGER', 'SECURITY CHIEF-9'],
+  subway: ['THE CONDUCTOR', 'THIRD RAIL'],
+  prison: ['THE WARDEN', 'BLOCK D BUTCHER'],
+  docks: ['THE HARBORMASTER', 'CARGO HULK'],
+  rooftops: ['THE FALLEN ANGEL', 'NEST GUARDIAN'],
+};
 
 const SUPERBOSSES = [
   { name: 'DON MARROW — MOB BOSS', goons: ['walker', 100] },
