@@ -230,6 +230,7 @@ function placeProps(lv, world) {
   const cx = world.w / 2, cy = world.h / 2;
   // prop counts scale with map area so huge maps stay dense
   const af = Math.min(3, (world.w * world.h) / (2400 * 1650));
+  const doorCost = 40 + LEVELS.indexOf(lv) * 35;
   const fits = (x, y, w, h) => {
     if (x < 20 || y < 20 || x + w > world.w - 20 || y + h > world.h - 20) return false;
     // keep the spawn area clear
@@ -252,6 +253,45 @@ function placeProps(lv, world) {
       }
     }
   };
+  // buildings you can walk into: floor + four walls with a paid door in the gap
+  const emitEnterable = (x, y, w, h, kind) => {
+    const T = 16; // wall thickness
+    const doorW = 56;
+    props.push({ x, y, w, h, kind: 'floor', low: true, seed: Math.random() });
+    // the doorway needs a wall long enough to cut a gap into
+    const validSides = [];
+    if (w >= 170) validSides.push(0, 1);
+    if (h >= 170) validSides.push(2, 3);
+    if (!validSides.length) validSides.push(0);
+    const side = validSides[Math.floor(Math.random() * validSides.length)];
+    const gapAt = (len) => T + 20 + Math.random() * (len - doorW - 2 * T - 40);
+    // top, bottom, left, right walls — one gets a doorway
+    const walls = [];
+    if (side === 0) {
+      const g0 = x + gapAt(w);
+      walls.push({ x, y, w: g0 - x, h: T }, { x: g0 + doorW, y, w: x + w - g0 - doorW, h: T });
+      props.push({ x: g0, y, w: doorW, h: T, kind: 'door', locked: true, cost: doorCost, lootX: x + w / 2, lootY: y + h / 2 });
+    } else walls.push({ x, y, w, h: T });
+    if (side === 1) {
+      const g0 = x + gapAt(w);
+      walls.push({ x, y: y + h - T, w: g0 - x, h: T }, { x: g0 + doorW, y: y + h - T, w: x + w - g0 - doorW, h: T });
+      props.push({ x: g0, y: y + h - T, w: doorW, h: T, kind: 'door', locked: true, cost: doorCost, lootX: x + w / 2, lootY: y + h / 2 });
+    } else walls.push({ x, y: y + h - T, w, h: T });
+    if (side === 2) {
+      const g0 = y + gapAt(h);
+      walls.push({ x, y, w: T, h: g0 - y }, { x, y: g0 + doorW, w: T, h: y + h - g0 - doorW });
+      props.push({ x, y: g0, w: T, h: doorW, kind: 'door', locked: true, cost: doorCost, lootX: x + w / 2, lootY: y + h / 2 });
+    } else walls.push({ x, y, w: T, h });
+    if (side === 3) {
+      const g0 = y + gapAt(h);
+      walls.push({ x: x + w - T, y, w: T, h: g0 - y }, { x: x + w - T, y: g0 + doorW, w: T, h: y + h - g0 - doorW });
+      props.push({ x: x + w - T, y: g0, w: T, h: doorW, kind: 'door', locked: true, cost: doorCost, lootX: x + w / 2, lootY: y + h / 2 });
+    } else walls.push({ x: x + w - T, y, w: T, h });
+    for (const wl of walls) {
+      if (wl.w > 0 && wl.h > 0) props.push({ ...wl, kind: 'wall', low: false, seed: Math.random() });
+    }
+  };
+
   // apartment blocks / large structures hug the edges
   const edgeBlocks = (n0, kind, bw, bh) => {
     const n = Math.round(n0 * af);
@@ -265,7 +305,12 @@ function placeProps(lv, world) {
       else if (side === 2) { x = 30 + Math.random() * 80; y = Math.random() * (world.h - h); }
       else { x = world.w - w - 30 - Math.random() * 80; y = Math.random() * (world.h - h); }
       if (fits(x, y, w, h)) {
-        props.push({ x, y, w, h, kind, low: false, seed: Math.random() });
+        // most buildings can be unlocked and looted
+        if ((kind === 'building' || kind === 'bunker' || kind === 'crypt') && Math.random() < 0.6) {
+          emitEnterable(x, y, w, h, kind === 'building' ? 'floor' : 'floor');
+        } else {
+          props.push({ x, y, w, h, kind, low: false, seed: Math.random() });
+        }
         i++;
       }
     }
@@ -305,6 +350,7 @@ function placeProps(lv, world) {
 // push a circle entity out of solid props (slides along walls)
 function collideProps(e) {
   for (const pr of game.props) {
+    if (pr.kind === 'floor') continue; // interiors are walkable
     const px = Math.max(pr.x, Math.min(e.x, pr.x + pr.w));
     const py = Math.max(pr.y, Math.min(e.y, pr.y + pr.h));
     const dx = e.x - px, dy = e.y - py;
@@ -509,6 +555,13 @@ function startLevel() {
   state = 'playing';
   charSheetOpen = false;
   Object.assign(cam, cameraTarget()); // snap, don't pan in from the old level
+  if (hordeMode) {
+    hordeRound = 1;
+    game.wave = 1;
+    spawnHorde();
+    banner('HORDE MODE', '200 of them. All of them want YOU.', '#ff1744');
+    return;
+  }
   const joinSubs = {
     soldier: 'sustained rifle fire', medic: 'healing aura — stay close to the cross',
     commander: 'her magnum pierces the horde', demo: 'grenades into the thickest cluster',
@@ -924,7 +977,14 @@ function update(dt) {
 
   // -- spawning / wave progression
   const lv = level();
-  if (g.spawnQueue.length) {
+  if (hordeMode) {
+    if (!g.zombies.length) {
+      hordeRound++;
+      spawnHorde();
+      banner(`ROUND ${hordeRound}`, 'they keep coming', '#ff1744');
+      sfx.playFanfare();
+    }
+  } else if (g.spawnQueue.length) {
     g.spawnTimer -= dt;
     if (g.spawnTimer <= 0) {
       // pressure ramps: pairs early, triples from wave 6
@@ -952,7 +1012,7 @@ function update(dt) {
   }
 
   // -- FRENZY: every 23 seconds the entire horde surges at 3x speed
-  if (g.zombies.length) {
+  if (g.zombies.length && !hordeMode) {
     g.frenzyTimer -= dt;
     if (g.frenzyTimer <= 0) {
       g.frenzyTimer = 23;
@@ -975,6 +1035,7 @@ function update(dt) {
     if (z.lunges && distT < 160) spdZ *= 1.8; // crawler pounce
     if (g.time < z.boostUntil) spdZ *= 1.5; // screamer haste
     if (frenzy && !z.human) spdZ *= 3; // FRENZY surge
+    if (hordeMode) spdZ *= 5; // horde mode: everything is 5x
     z.wobble += dt * 5;
     z.flash = Math.max(0, z.flash - dt);
     const holdPosition = z.ranged && distT < z.ranged.range * 0.85;
@@ -1254,6 +1315,34 @@ function update(dt) {
   // -- explosions animate
   for (const ex of g.explosions) ex.t -= dt;
   g.explosions = g.explosions.filter((ex) => ex.t > 0);
+
+  // -- locked doors: pay scrap to open, loot waits inside
+  for (let i = g.props.length - 1; i >= 0; i--) {
+    const pr = g.props[i];
+    if (pr.kind !== 'door') continue;
+    const dx = Math.max(pr.x, Math.min(p.x, pr.x + pr.w)) - p.x;
+    const dy = Math.max(pr.y, Math.min(p.y, pr.y + pr.h)) - p.y;
+    if (dx * dx + dy * dy < 70 * 70 && (wasPressed('f') || gpPressed('a'))) {
+      if (char.scrap >= pr.cost) {
+        char.scrap -= pr.cost;
+        saveCharacter(char);
+        g.props.splice(i, 1); // the door swings open
+        sfx.playPurchase();
+        banner('DOOR UNLOCKED', 'something useful inside', '#ffd54f');
+        // interior loot
+        for (let k = 0; k < 3; k++) {
+          const a = Math.random() * Math.PI * 2;
+          g.scraps.push({ x: pr.lootX, y: pr.lootY, vx: Math.cos(a) * 100, vy: Math.sin(a) * 100, amount: 15 + Math.floor(Math.random() * 25) });
+        }
+        dropLoot(pr.lootX + 24, pr.lootY, true);
+        dropLoot(pr.lootX - 24, pr.lootY, true);
+        if (Math.random() < 0.25) g.caches.push({ x: pr.lootX, y: pr.lootY + 30, radius: 16, taken: false, pulse: 0 });
+      } else {
+        sfx.playDenied();
+        g.dmgNumbers.push({ x: p.x, y: p.y - 24, txt: `NEED ⚙${pr.cost}`, color: '#ef5350', life: 1, vy: -40 });
+      }
+    }
+  }
 
   // -- secret caches
   for (const ca of g.caches) {
@@ -1544,7 +1633,40 @@ function drawProps() {
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(pr.x + 7, pr.y + 9, pr.w, pr.h);
     }
-    if (pr.kind === 'wreck' || pr.kind === 'statue') {
+    if (pr.kind === 'floor') {
+      ctx.fillStyle = 'rgba(14,16,20,0.88)';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.strokeStyle = 'rgba(80,90,100,0.25)';
+      for (let gx = pr.x + 24; gx < pr.x + pr.w; gx += 48) {
+        ctx.beginPath();
+        ctx.moveTo(gx, pr.y);
+        ctx.lineTo(gx, pr.y + pr.h);
+        ctx.stroke();
+      }
+    } else if (pr.kind === 'wall') {
+      ctx.fillStyle = '#262c35';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.strokeStyle = '#3d4754';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(pr.x + 1, pr.y + 1, pr.w - 2, pr.h - 2);
+    } else if (pr.kind === 'door') {
+      ctx.fillStyle = '#5d4326';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.strokeStyle = '#ffd54f';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(pr.x + 1, pr.y + 1, pr.w - 2, pr.h - 2);
+      // cost label when the player is close
+      const p = game.player;
+      const dcx = pr.x + pr.w / 2, dcy = pr.y + pr.h / 2;
+      if (Math.hypot(p.x - dcx, p.y - dcy) < 140) {
+        ctx.font = 'bold 13px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = char.scrap >= pr.cost ? '#ffd54f' : '#ef5350';
+        ctx.fillText(`[F] UNLOCK ⚙${pr.cost}`, dcx, dcy - 16);
+        ctx.textBaseline = 'top';
+      }
+    } else if (pr.kind === 'wreck' || pr.kind === 'statue') {
       const sp = SPRITES[pr.kind];
       if (sp) {
         ctx.save();
@@ -2055,8 +2177,8 @@ function drawHUD() {
 
   ctx.textAlign = 'center';
   ctx.font = 'bold 18px monospace';
-  ctx.fillStyle = '#ef9a9a';
-  ctx.fillText(`${lv.name} — WAVE ${game.wave}/${lv.waves}`, canvas.width / 2, 22);
+  ctx.fillStyle = hordeMode ? '#ff1744' : '#ef9a9a';
+  ctx.fillText(hordeMode ? `☠ HORDE MODE — ROUND ${hordeRound} ☠` : `${lv.name} — WAVE ${game.wave}/${lv.waves}`, canvas.width / 2, 22);
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
   ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, canvas.width / 2, 46);
@@ -2263,6 +2385,22 @@ function drawShop() {
 
 let selectMode = 'hero'; // 'hero' picks the player, 'partner' picks the companion
 let reSelecting = false; // changing survivor from the menu skips the cinematic
+let hordeMode = false; // 200 zombies at once, 5x speed, endless rounds
+let hordeRound = 0;
+
+function spawnHorde() {
+  const g = game;
+  for (let i = 0; i < 200; i++) {
+    const z = spawnLevelZombie('walker');
+    // spread the drop over a wide ring so 200 don't stack on one pixel
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.max(canvas.width, canvas.height) * 0.62 + 100 + Math.random() * 700;
+    z.x = Math.max(30, Math.min(g.world.w - 30, g.player.x + Math.cos(a) * r));
+    z.y = Math.max(30, Math.min(g.world.h - 30, g.player.y + Math.sin(a) * r));
+    z.hp = z.maxHp = Math.round(z.hp * (1 + (hordeRound - 1) * 0.15));
+    g.zombies.push(z);
+  }
+}
 
 function drawLevelSelect() {
   ctx.fillStyle = '#08090b';
@@ -2317,6 +2455,7 @@ function drawLevelSelect() {
     ctx.fillStyle = '#90a4ae';
     if (unlocked) ctx.fillText(`${lv.waves} waves · ${lv.bosses} boss${lv.bosses > 1 ? 'es' : ''} · 3 secrets`, x + cw / 2, y0 + chh - 28, cw - 10);
     button(x, y0, cw, chh, () => {
+      hordeMode = false;
       char.campaignLevel = i;
       char.checkpoint = null;
       saveCharacter(char);
@@ -2324,28 +2463,49 @@ function drawLevelSelect() {
     }, unlocked);
   });
 
-  // change survivor / partner
-  const bw = 320;
-  const by = y0 + chh + 22;
-  const idx = uiButtons.length;
-  const focused = gamepad.connected && idx === gpFocus;
-  ctx.fillStyle = 'rgba(20,24,30,0.94)';
-  ctx.fillRect(cx - bw / 2, by, bw, 42);
-  ctx.strokeStyle = focused ? '#ffd54f' : '#546e7a';
-  ctx.lineWidth = focused ? 3 : 1;
-  ctx.strokeRect(cx - bw / 2, by, bw, 42);
-  ctx.font = 'bold 14px monospace';
-  ctx.fillStyle = '#80cbc4';
-  ctx.fillText(`CHANGE SURVIVOR — ${heroById(char.heroId).name}`, cx, by + 13, bw - 16);
-  button(cx - bw / 2, by, bw, 42, () => {
-    reSelecting = true;
-    selectMode = 'hero';
-    gpFocus = 0;
-    state = 'charselect';
-  });
+  // survivor select + horde mode, side by side
+  const bw = 350, bh2 = 48, bgap = 24;
+  const by = y0 + chh + 20;
+  {
+    const bx = cx - bw - bgap / 2;
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
+    ctx.fillStyle = 'rgba(18,30,33,0.95)';
+    ctx.fillRect(bx, by, bw, bh2);
+    ctx.strokeStyle = focused ? '#ffd54f' : '#80cbc4';
+    ctx.lineWidth = focused ? 3 : 2;
+    ctx.strokeRect(bx, by, bw, bh2);
+    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = '#80cbc4';
+    ctx.fillText(`★ SELECT SURVIVOR — ${heroById(char.heroId).name}`, bx + bw / 2, by + 15, bw - 16);
+    button(bx, by, bw, bh2, () => {
+      reSelecting = true;
+      selectMode = 'hero';
+      gpFocus = 0;
+      state = 'charselect';
+    });
+  }
+  {
+    const bx = cx + bgap / 2;
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
+    ctx.fillStyle = 'rgba(40,12,16,0.95)';
+    ctx.fillRect(bx, by, bw, bh2);
+    ctx.strokeStyle = focused ? '#ffd54f' : '#ff1744';
+    ctx.lineWidth = focused ? 3 : 2;
+    ctx.strokeRect(bx, by, bw, bh2);
+    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = '#ff5252';
+    ctx.fillText('☠ HORDE MODE — 200 AT ONCE, 5x SPEED', bx + bw / 2, by + 15, bw - 16);
+    button(bx, by, bw, bh2, () => {
+      hordeMode = true;
+      char.checkpoint = null;
+      startLevel();
+    });
+  }
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
-  ctx.fillText(`LV ${char.level} · ⚙ ${char.scrap} · ${char.totalKills} kills · secrets found ${char.secretsFound || 0}`, cx, by + 56);
+  ctx.fillText(`LV ${char.level} · ⚙ ${char.scrap} · ${char.totalKills} kills · secrets found ${char.secretsFound || 0}`, cx, by + bh2 + 14);
   ctx.restore();
 }
 
@@ -2971,7 +3131,13 @@ function frame(now) {
   } else if (state === 'shop') {
     if (wasPressed('tab') || gpPressed('start')) charSheetOpen = !charSheetOpen;
   } else if (state === 'gameover') {
-    if (wasPressed('mouse')) enterLevelIntro();
+    if (wasPressed('mouse')) {
+      if (hordeMode) {
+        hordeMode = false;
+        gpFocus = 0;
+        state = 'levelselect';
+      } else enterLevelIntro();
+    }
   } else if (state === 'victory') {
     if (wasPressed('mouse')) {
       char.campaignLevel = 0;
