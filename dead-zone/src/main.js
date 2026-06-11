@@ -87,7 +87,10 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder',
                     'crawler', 'screamer', 'rogue', 'cache', 'wreck', 'statue',
                     'granny', 'cop', 'hazmat', 'butcher', 'dog', 'stalker',
-                    'drive_sports', 'drive_taxi', 'drive_police', 'drive_armored']) {
+                    'drive_sports', 'drive_taxi', 'drive_police', 'drive_armored',
+                    'player_walk', 'player_f_walk', 'hero_medic_walk', 'hero_builder_walk',
+                    'hero_hacker_walk', 'hero_cop_walk', 'hero_biker_walk', 'hero_engineer_walk',
+                    'hero_veteran_walk', 'hero_athlete_walk']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -698,6 +701,15 @@ function startLevel() {
   decalCtx = decalCanvas.getContext('2d');
   decalCtx.scale(DECAL_SCALE, DECAL_SCALE);
   screenBlood = [];
+  // lived-in streets: oil stains, scorch and grime baked in from the start
+  for (let i = 0; i < 90; i++) {
+    const gx = Math.random() * game.world.w;
+    const gy = Math.random() * game.world.h;
+    decalCtx.fillStyle = Math.random() < 0.5 ? 'rgba(20,22,26,0.35)' : 'rgba(38,30,22,0.3)';
+    decalCtx.beginPath();
+    decalCtx.arc(gx, gy, 6 + Math.random() * 22, 0, Math.PI * 2);
+    decalCtx.fill();
+  }
   state = 'playing';
   charSheetOpen = false;
   Object.assign(cam, cameraTarget()); // snap, don't pan in from the old level
@@ -1507,6 +1519,7 @@ function update(dt) {
       bz.score = 2000;
       g.zombies.push(bz);
       g.superBoss = bz;
+      g.bossIntroT = 2.4;
       for (let i = 0; i < sb.goons[1]; i++) g.zombies.push(spawnLevelZombie(sb.goons[0]));
       setTimeout(() => banner('SUPER BOSS', sb.name, '#ffd700'), 1600);
       sfx.playScream();
@@ -2224,6 +2237,14 @@ function killZombie(z, dirAngle) {
   g.combo++;
   g.comboT = 2.2;
   g.comboBest = Math.max(g.comboBest, g.combo);
+  const HYPE = { 10: 'RAMPAGE!', 25: 'MASSACRE!', 50: 'UNSTOPPABLE!', 100: 'GODLIKE!' };
+  if (HYPE[g.combo]) {
+    banner(HYPE[g.combo], `COMBO ×${g.combo} — +${g.combo * 10} SCORE`, '#ffd740');
+    g.score += g.combo * 10;
+    g.hypeFlash = 0.3;
+    sfx.playFanfare();
+    addShake(8);
+  }
   const mult = Math.min(5, 1 + g.combo * 0.1);
   const gained = Math.round(z.score * mult);
   g.score += gained - z.score; // base z.score added below as before
@@ -2241,7 +2262,9 @@ function killZombie(z, dirAngle) {
   sfx.playKillThud();
   addShake(1.1);
   const bigKill = z.radius > 19 || z.super;
-  g.killMarks.push({ x: z.x, y: z.y, t: 0.4, big: bigKill });
+  // kill X grows with your combo — at high chains they get HUGE
+  const xr = (bigKill ? 26 : 13) * (1 + Math.min(2.2, g.combo * 0.045));
+  g.killMarks.push({ x: z.x, y: z.y, t: 0.4, big: bigKill, r: xr });
   if (bigKill) {
     hitStopT = Math.max(hitStopT, 0.06);
     addShake(4);
@@ -2278,6 +2301,27 @@ function killZombie(z, dirAngle) {
     sfx.playFanfare();
     g.player.hp = derived(char).maxHp;
     g.player.armorHP = g.player.armorMax;
+  }
+  if (g.streak >= 100 && !g.streakFired[100]) {
+    g.streakFired[100] = true;
+    banner('☢ TACTICAL NUKE ☢', 'the screen goes white', '#fff');
+    sfx.playHiggsWhomp();
+    sfx.playFanfare();
+    g.nukeFlash = 0.8;
+    addShake(24);
+    hitStopT = Math.max(hitStopT, 0.1);
+    for (const zz of [...g.zombies]) {
+      if (zz.hp <= 0) continue;
+      if (zz.super) { zz.hp -= 1500; zz.flash = 0.2; if (zz.hp <= 0) killZombie(zz, Math.random() * 6.28); }
+      else { zz.hp = 0; killZombie(zz, Math.random() * 6.28); }
+    }
+  }
+  if (g.streak >= 150 && !g.streakFired[150]) {
+    g.streakFired[150] = true;
+    banner('⚡ OVERDRIVE ⚡', '10 seconds of godhood', '#ffd740');
+    sfx.playFanfare();
+    g.player.invulnUntil = g.time + 10;
+    g.buffs.rage = Math.max(g.buffs.rage, 10);
     g.streak = 0;
     g.streakFired = {};
   }
@@ -2736,7 +2780,11 @@ function drawAlly(a) {
   ctx.rotate(a.angle + Math.sin(a.walkPhase || 0) * 0.07);
   const sq = Math.sin((a.walkPhase || 0) * 2) * 0.03;
   ctx.scale(1 + sq, 1 - sq);
-  const sprite = SPRITES[a.sprite || a.type];
+  const aBase = a.sprite || a.type;
+  const aWalk = SPRITES[aBase + '_walk'];
+  const aMoving = (a.walkPhase || 0) !== (a._lastWP || 0);
+  a._lastWP = a.walkPhase || 0;
+  const sprite = (aWalk && aMoving && Math.floor((a.walkPhase || 0) * 1.6) % 2 === 1 ? aWalk : SPRITES[aBase]);
   if (sprite) drawSprite(sprite, a.radius * 3.4);
   else {
     ctx.fillStyle = a.color;
@@ -2805,7 +2853,11 @@ function drawPlayer() {
   ctx.rotate(p.angle + rock);
   ctx.scale(1 + squish, 1 - squish);
   if (game.time < p.invulnUntil) ctx.globalAlpha = 0.55; // dash ghosting
-  const sprite = SPRITES[heroById(char.heroId).sprite] || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
+  const spriteName = heroById(char.heroId).sprite;
+  const moving = Math.hypot(p.vx, p.vy) > 40;
+  const walkFrame = SPRITES[spriteName + '_walk'];
+  const useWalk = walkFrame && moving && Math.floor(p.walkPhase * 1.6) % 2 === 1;
+  const sprite = (useWalk ? walkFrame : SPRITES[spriteName]) || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
   if (sprite) {
     drawSprite(sprite, p.radius * 3.6);
   } else {
@@ -4248,7 +4300,7 @@ function render(dt) {
   // red kill X's, SYNTHETIK style
   for (const km of game.killMarks) {
     const t = km.t / 0.4;
-    const r = (km.big ? 26 : 13) * (1.6 - t * 0.6);
+    const r = (km.r || (km.big ? 26 : 13)) * (1.6 - t * 0.6);
     ctx.strokeStyle = `rgba(244,67,54,${t})`;
     ctx.lineWidth = km.big ? 6 : 3.5;
     ctx.beginPath();
@@ -4282,6 +4334,34 @@ function render(dt) {
     const pulse = 0.05 + 0.04 * Math.sin(performance.now() / 90);
     ctx.fillStyle = `rgba(255,23,68,${pulse})`;
     ctx.fillRect(0, 0, view.w, view.h);
+  }
+  if (game.nukeFlash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(0.95, game.nukeFlash)})`;
+    ctx.fillRect(0, 0, view.w, view.h);
+    game.nukeFlash -= dt * 1.4;
+  }
+  if (game.hypeFlash > 0) {
+    ctx.fillStyle = `rgba(255,215,64,${game.hypeFlash * 0.3})`;
+    ctx.fillRect(0, 0, view.w, view.h);
+    game.hypeFlash -= dt * 1.4;
+  }
+  // boss-intro cinematic: letterbox bars + the name card
+  if (game.bossIntroT > 0) {
+    game.bossIntroT -= dt;
+    const k = Math.min(1, (2.4 - game.bossIntroT) * 2.5);
+    const barH = Math.round(view.h * 0.12 * k);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, view.w, barH);
+    ctx.fillRect(0, view.h - barH, view.w, barH);
+    if (game.superBoss) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 44px monospace';
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = '#000';
+      ctx.strokeText(game.superBoss.super, view.w / 2, view.h * 0.78);
+      ctx.fillStyle = '#ffd700';
+      ctx.fillText(game.superBoss.super, view.w / 2, view.h * 0.78);
+    }
   }
   drawScreenBlood();
   drawHUD();

@@ -220,6 +220,38 @@ export const PRE_CUTSCENES = {
   ],
 };
 
+// deeper arc: deploy cinematics for the post-Delta levels
+PRE_CUTSCENES[5] = [
+  { img: 'levels/base-intro.png', duration: 6, zoomFrom: 1.12, zoomTo: 1.0,
+    lines: ['Delta is ash, but the radio finds new ghosts.', 'ECHO-6: "I\'m picking up a loop from the Galleria. Mall security, channel 9."'] },
+  { img: 'levels/mall-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.15,
+    lines: ['"ATTENTION SHOPPERS," the loop says. Then it says your name.'] },
+];
+PRE_CUTSCENES[6] = [
+  { img: 'levels/mall-intro.png', duration: 6, zoomFrom: 1.1, zoomTo: 1.0,
+    lines: ['Below the Galleria, the tunnels hum.', 'ECHO-6: "The 3:14 to Riverside is still on the rails. Nothing human is driving."'] },
+  { img: 'levels/subway-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.14,
+    lines: ['You take the stairs down. The platform lights die one by one. Behind you.'] },
+];
+PRE_CUTSCENES[7] = [
+  { img: 'levels/subway-intro.png', duration: 6, zoomFrom: 1.12, zoomTo: 1.0,
+    lines: ['The tunnel ends at a wall of bars. Blackgate.', 'ECHO-6: "Three thousand inmates. The Warden\'s last report: THEY REMEMBER THEIR CELLS."'] },
+  { img: 'levels/prison-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.16,
+    lines: ['Every door in the block stands open. Every door but one. It\'s welded. From inside.'] },
+];
+PRE_CUTSCENES[8] = [
+  { img: 'levels/prison-intro.png', duration: 6, zoomFrom: 1.1, zoomTo: 1.0,
+    lines: ['The Warden\'s keys open the service gate to the waterfront.', 'ECHO-6: "The VERA is still moored out there. The ship that brought the second outbreak."'] },
+  { img: 'levels/docks-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.15,
+    lines: ['Fog rolls off the harbor. Somewhere in it, a crane is still moving.'] },
+];
+PRE_CUTSCENES[9] = [
+  { img: 'levels/docks-intro.png', duration: 6, zoomFrom: 1.1, zoomTo: 1.0,
+    lines: ['The harbor burns behind you. One climb left.', 'ECHO-6: "The final nest took the high ground. The roofs. Where the survivors were."'] },
+  { img: 'levels/rooftops-intro.png', duration: 7, zoomFrom: 1.0, zoomTo: 1.2,
+    lines: ['Dawn breaks blood-red over the skyline.', 'ECHO-6: "After this, I\'m coming down from my tower. Save me a rooftop."'] },
+];
+
 export const VICTORY_SHOTS = [
   { img: 'levels/base-intro.png', duration: 6, zoomFrom: 1.0, zoomTo: 1.2,
     lines: ['The nest screams once. Then nothing.', 'The boils stop glowing. The horde just... stops.'] },
