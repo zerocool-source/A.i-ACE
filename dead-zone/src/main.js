@@ -10,6 +10,7 @@ import {
 import { pollGamepad, gpPressed, gamepad, rumble } from './gamepad.js';
 import * as sfx from './audio.js';
 import { asset } from './assets.js';
+import { settings, saveSettings, upscaleMode, UPSCALE_MODES, detectGPU } from './settings.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -18,15 +19,23 @@ const ctx = canvas.getContext('2d');
 // for crisp HiDPI/4K output; all game code works in logical pixels
 const view = { w: window.innerWidth, h: window.innerHeight };
 let dpr = Math.min(2, window.devicePixelRatio || 1);
+// upscaling: the backing store renders at renderScale of the output, then
+// the compositor stretches it to the display — DLSS/FSR architecture, sans
+// the buffers a canvas-2D pipeline doesn't have (motion vectors / depth)
+let renderScale = upscaleMode().scale;
+const GPU = detectGPU();
 
 function resize() {
   view.w = window.innerWidth;
   view.h = window.innerHeight;
   dpr = Math.min(2, window.devicePixelRatio || 1);
-  canvas.width = Math.round(view.w * dpr);
-  canvas.height = Math.round(view.h * dpr);
+  renderScale = upscaleMode().scale;
+  canvas.width = Math.max(2, Math.round(view.w * dpr * renderScale));
+  canvas.height = Math.max(2, Math.round(view.h * dpr * renderScale));
   canvas.style.width = view.w + 'px';
   canvas.style.height = view.h + 'px';
+  // RCAS-ish convolution sharpen recovers edge contrast lost to the stretch
+  canvas.classList.toggle('upscale-sharpen', renderScale < 1 && settings.sharpen);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -230,6 +239,7 @@ let hasSave = !!char;
 if (!char) char = newCharacter();
 let game = null;
 let charSheetOpen = false;
+let videoOpen = false; // VIDEO / upscaling panel on the title screen
 let banners = []; // {text, sub, t, color}
 let briefingStart = 0; // typewriter clock for the level-intro story text
 let screenBlood = []; // splatter stuck to the camera: {fx, fy, r, alpha}
@@ -4717,6 +4727,98 @@ function drawTitleOverlay(t, cx) {
       ctx.fillText('[N] new campaign (wipes save)', cx, view.h - 58);
     }
     ctx.restore();
+    drawVideoSettings();
+}
+
+// ---- VIDEO / upscaling panel -------------------------------------------------
+// FSR-style spatial upscaling: pick an internal render scale, the compositor
+// stretches to output, an optional convolution sharpen restores edge bite.
+function drawVideoSettings() {
+  ctx.save();
+  ctx.textBaseline = 'top';
+  // gear button, top-right
+  const gw = 150, gh = 34, gx = view.w - gw - 16, gy = 14;
+  ctx.fillStyle = videoOpen ? 'rgba(40,48,60,0.95)' : 'rgba(18,22,28,0.85)';
+  ctx.fillRect(gx, gy, gw, gh);
+  ctx.strokeStyle = '#546e7a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(gx, gy, gw, gh);
+  ctx.font = 'bold 14px monospace';
+  ctx.fillStyle = '#cfd8dc';
+  ctx.textAlign = 'center';
+  ctx.fillText('⚙ VIDEO', gx + gw / 2, gy + 9);
+  button(gx, gy, gw, gh, () => { videoOpen = !videoOpen; });
+  if (!videoOpen) {
+    if (renderScale < 1) {
+      ctx.font = '11px monospace';
+      ctx.fillStyle = '#80cbc4';
+      ctx.fillText(`UPSCALING: ${upscaleMode().name}`, gx + gw / 2, gy + gh + 6);
+    }
+    ctx.restore();
+    return;
+  }
+  const pw = Math.min(560, view.w - 60);
+  const ph = 396;
+  const px = (view.w - pw) / 2;
+  const py = (view.h - ph) / 2 - 20;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  ctx.fillStyle = 'rgba(13,16,21,0.97)';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = '#80cbc4';
+  ctx.strokeRect(px, py, pw, ph);
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('VIDEO — RESOLUTION UPSCALING', px + pw / 2, py + 16);
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#78909c';
+  ctx.fillText('renders internally at lower resolution, upscales to your display (FSR-style)', px + pw / 2, py + 42);
+  let by = py + 64;
+  for (const m of UPSCALE_MODES) {
+    const active = settings.upscale === m.id;
+    ctx.fillStyle = active ? 'rgba(38,82,75,0.95)' : 'rgba(26,32,40,0.95)';
+    ctx.fillRect(px + 24, by, pw - 48, 40);
+    ctx.strokeStyle = active ? '#80cbc4' : '#37474f';
+    ctx.strokeRect(px + 24, by, pw - 48, 40);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = active ? '#80cbc4' : '#cfd8dc';
+    ctx.fillText(m.name, px + 40, by + 6);
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#78909c';
+    ctx.fillText(m.desc, px + 40, by + 24);
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillStyle = '#9e9e9e';
+    ctx.fillText(`${Math.round(view.w * dpr * m.scale)}×${Math.round(view.h * dpr * m.scale)}`, px + pw - 40, by + 13);
+    ctx.textAlign = 'center';
+    button(px + 24, by, pw - 48, 40, () => {
+      settings.upscale = m.id;
+      saveSettings();
+      resize();
+    });
+    by += 46;
+  }
+  // sharpen toggle
+  const shOn = settings.sharpen;
+  ctx.fillStyle = shOn ? 'rgba(38,82,75,0.95)' : 'rgba(26,32,40,0.95)';
+  ctx.fillRect(px + 24, by, pw - 48, 32);
+  ctx.strokeStyle = shOn ? '#80cbc4' : '#37474f';
+  ctx.strokeRect(px + 24, by, pw - 48, 32);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = shOn ? '#80cbc4' : '#9e9e9e';
+  ctx.fillText(`SHARPEN PASS: ${shOn ? 'ON' : 'OFF'} (recovers edge contrast when upscaling)`, px + pw / 2, by + 9);
+  button(px + 24, by, pw - 48, 32, () => {
+    settings.sharpen = !settings.sharpen;
+    saveSettings();
+    resize();
+  });
+  by += 42;
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#607d8b';
+  ctx.fillText(`GPU: ${GPU.vendor} — ${GPU.renderer}`, px + pw / 2, by);
+  ctx.fillText(`output ${Math.round(view.w * dpr)}×${Math.round(view.h * dpr)} · internal ${canvas.width}×${canvas.height}`, px + pw / 2, by + 16);
+  ctx.restore();
 }
 
 function drawTitleFallback(t, cx, cy) {
@@ -4826,7 +4928,7 @@ function drawVictory() {
 let lastFrame = performance.now();
 
 function render(dt) {
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.setTransform(dpr * renderScale, 0, 0, dpr * renderScale, 0, 0);
   uiButtons = [];
   if (state === 'title') return drawTitle();
   if (state === 'levelselect') return drawLevelSelect();
@@ -5338,7 +5440,7 @@ function frameInner(now) {
   wasGpConnected = gamepad.connected;
 
   // gamepad UI focus: d-pad browses buttons laid out last frame, A activates
-  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect' || state === 'gameover' || state === 'levelintro';
+  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect' || state === 'gameover' || state === 'levelintro' || state === 'title';
   if (uiState && uiButtons.length) {
     if (gpPressed('down') || gpPressed('right')) gpFocus = (gpFocus + 1) % uiButtons.length;
     if (gpPressed('up') || gpPressed('left')) gpFocus = (gpFocus - 1 + uiButtons.length) % uiButtons.length;
@@ -5356,6 +5458,7 @@ function frameInner(now) {
   if (uiClicked) input.pressed.delete('mouse');
 
   if (state === 'title') {
+    if (videoOpen) input.pressed.delete('mouse'); // panel modal: clicks stay inside
     if (wasPressed('n') && hasSave) {
       wipeSave();
       char = newCharacter();

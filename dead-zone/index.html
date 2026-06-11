@@ -8,9 +8,18 @@
     <style>
       html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #060608; }
       canvas { display: block; cursor: crosshair; }
+      /* RCAS-style sharpen applied when the canvas renders below output
+         resolution — a 3x3 unsharp convolution on the composited image */
+      .upscale-sharpen { filter: url(#dz-sharpen); }
     </style>
   </head>
   <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <filter id="dz-sharpen">
+        <feConvolveMatrix order="3" preserveAlpha="true"
+          kernelMatrix="0 -0.25 0  -0.25 2 -0.25  0 -0.25 0" />
+      </filter>
+    </svg>
     <canvas id="game"></canvas>
     <script type="module" src="/src/main.js"></script>
   </body>
