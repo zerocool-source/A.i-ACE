@@ -90,4 +90,16 @@ export function gpPressed(name) {
   return state.pressed.has(name);
 }
 
+// controller haptics: rumbles on hits, blasts and heavy shots
+export function rumble(strong, weak, ms) {
+  try {
+    const gp = pickPad();
+    gp?.vibrationActuator?.playEffect('dual-rumble', {
+      duration: ms,
+      strongMagnitude: Math.min(1, strong),
+      weakMagnitude: Math.min(1, weak),
+    });
+  } catch { /* no haptics on this pad */ }
+}
+
 export const gamepad = state;

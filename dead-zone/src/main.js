@@ -7,7 +7,7 @@ import {
   ATTRS, newCharacter, xpForLevel, grantXp, derived, weaponStats,
   shopCatalog, saveCharacter, loadCharacter, wipeSave,
 } from './rpg.js';
-import { pollGamepad, gpPressed, gamepad } from './gamepad.js';
+import { pollGamepad, gpPressed, gamepad, rumble } from './gamepad.js';
 import * as sfx from './audio.js';
 import { asset } from './assets.js';
 
@@ -101,7 +101,10 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'gore_arm', 'gore_leg', 'gore_head', 'gore_torso', 'gore_chunk',
                     'splat1', 'splat2', 'splat3', 'scorch', 'fire', 'muzzle',
                     'corpsepile', 'ambulance', 'vending', 'dragtrail', 'entrails',
-                    'bus', 'rubble', 'dumpster', 'barricade']) {
+                    'bus', 'rubble', 'dumpster', 'barricade',
+                    'fountain', 'kiosk', 'traincar', 'watchtower', 'container',
+                    'crane', 'helipad', 'acunit', 'mausoleum', 'tank', 'tent',
+                    'sewergrate', 'waterpool']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   spritesTotal++;
@@ -127,10 +130,48 @@ function drawSpriteFit(sp, maxW, maxH) {
   ctx.drawImage(sp, (-sp.width * k) / 2, (-sp.height * k) / 2, sp.width * k, sp.height * k);
 }
 
+// frame-jitter killer: each character's idle/walk/run art is trimmed to
+// different bounds, so scaling them individually made walkers pulse in size.
+// Padding every frame onto one shared canvas makes all frames scale identically.
+const animCache = {};
+function animFrames(name) {
+  if (animCache[name]) return animCache[name];
+  const idle = SPRITES[name], walk = SPRITES[name + '_walk'];
+  if (!idle || !walk) return null;
+  const run = SPRITES[name + '_run'];
+  const frames = run ? [idle, walk, run] : [idle, walk];
+  const W = Math.max(...frames.map((f) => f.width));
+  const H = Math.max(...frames.map((f) => f.height));
+  const pad = frames.map((f) => {
+    const cv = document.createElement('canvas');
+    cv.width = W;
+    cv.height = H;
+    cv.getContext('2d').drawImage(f, (W - f.width) / 2, (H - f.height) / 2);
+    return cv;
+  });
+  return (animCache[name] = { idle: pad[0], walk: pad[1], run: pad[2] || pad[1] });
+}
+
 const titleArt = new Image();
 titleArt.src = asset('title-bg.png');
 
 // living title screen: the generated horde video loops behind the menu
+// animated character select: each painted portrait gets a living video loop
+const portraitVids = {};
+function portraitVideo(id) {
+  let v = portraitVids[id];
+  if (!v) {
+    v = document.createElement('video');
+    v.src = asset(`portraits/${id}.mp4`);
+    v.muted = true;
+    v.loop = true;
+    v.playsInline = true;
+    v.onerror = () => { v._broken = true; };
+    portraitVids[id] = v;
+  }
+  return v;
+}
+
 const titleVideo = document.createElement('video');
 titleVideo.src = asset('levels/horde-video.mp4');
 titleVideo.muted = true;
@@ -405,16 +446,20 @@ function placeProps(lv, world) {
       midBlocks(5, 'building', 280, 180);
       scatter(9, 64, 80, 32, 40, 'car');
       scatter(3, 36, 48, 36, 48, 'crate', true);
+      scatter(1 / af, 140, 170, 140, 170, 'tent'); // abandoned triage post
       break;
     case 'graveyard':
       edgeBlocks(4, 'crypt', 180, 130);
       midBlocks(3, 'crypt', 180, 130);
       scatter(42, 24, 30, 34, 42, 'grave', true);
+      scatter(2 / af, 150, 190, 150, 190, 'mausoleum');
       break;
     case 'sewer':
       edgeBlocks(6, 'pipe', 340, 60);
       scatter(10, 200, 320, 44, 60, 'pipe');
       scatter(8, 40, 56, 40, 56, 'crate', true);
+      scatter(3, 110, 150, 110, 150, 'sewergrate', true);
+      scatter(5, 90, 150, 70, 110, 'waterpool', true);
       break;
     case 'hospital':
       edgeBlocks(7, 'building', 260, 170);
@@ -427,26 +472,34 @@ function placeProps(lv, world) {
       midBlocks(4, 'bunker', 240, 160);
       scatter(18, 36, 110, 30, 44, 'sandbag', true);
       scatter(12, 40, 56, 40, 56, 'crate', true);
+      scatter(1 / af, 210, 250, 110, 140, 'tank'); // knocked-out armor column
+      scatter(2 / af, 140, 170, 140, 170, 'tent');
       break;
     case 'mall':
       edgeBlocks(8, 'building', 280, 190);
       midBlocks(7, 'building', 260, 180);
       scatter(10, 36, 52, 36, 52, 'crate', true);
       scatter(8, 30, 42, 60, 84, 'gurney', true);
+      scatter(1 / af, 180, 210, 180, 210, 'fountain'); // the dead courtyard
+      scatter(5, 70, 100, 70, 100, 'kiosk');
       break;
     case 'subway':
       edgeBlocks(5, 'pipe', 380, 64);
       midBlocks(4, 'building', 240, 150);
       scatter(12, 200, 340, 44, 60, 'pipe');
       scatter(8, 40, 56, 40, 56, 'crate', true);
+      scatter(2 / af, 330, 390, 90, 115, 'traincar'); // the derailed 3:14
       break;
     case 'prison':
       edgeBlocks(8, 'bunker', 250, 170);
       midBlocks(5, 'bunker', 230, 150);
       scatter(16, 36, 110, 30, 44, 'sandbag', true);
+      scatter(3 / af, 110, 145, 110, 145, 'watchtower');
       break;
     case 'docks':
-      midBlocks(9, 'cabinet', 200, 90); // container stacks
+      midBlocks(4, 'cabinet', 200, 90);
+      scatter(12, 150, 220, 60, 90, 'container'); // real container yard
+      scatter(1 / af, 230, 270, 230, 270, 'crane');
       scatter(14, 64, 90, 32, 44, 'car');
       scatter(12, 40, 60, 40, 60, 'crate', true);
       break;
@@ -454,6 +507,8 @@ function placeProps(lv, world) {
       edgeBlocks(10, 'building', 300, 200);
       midBlocks(8, 'building', 260, 180);
       scatter(10, 36, 52, 36, 52, 'cabinet');
+      scatter(1 / af, 210, 250, 210, 250, 'helipad', true); // last evac point
+      scatter(8, 60, 90, 50, 70, 'acunit');
       break;
   }
   // street dressing — light touch on level 1, denser later
@@ -477,9 +532,11 @@ function placeProps(lv, world) {
 }
 
 // push a circle entity out of solid props (slides along walls)
+const WALK_PROPS = new Set(['helipad', 'waterpool', 'sewergrate']);
+
 function collideProps(e) {
   for (const pr of game.props) {
-    if (pr.kind === 'floor') continue; // interiors are walkable
+    if (pr.kind === 'floor' || WALK_PROPS.has(pr.kind)) continue; // walk-over art
     const px = Math.max(pr.x, Math.min(e.x, pr.x + pr.w));
     const py = Math.max(pr.y, Math.min(e.y, pr.y + pr.h));
     const dx = e.x - px, dy = e.y - py;
@@ -618,6 +675,7 @@ function newGame() {
     buffs: { rage: 0, shield: 0 }, // seconds remaining
     higgs: { charge: 1, activeUntil: 0, ringT: -1 },
     props: placeProps(lv, world),
+    lights: [],
     caches: [],
     rogueBannerShown: false,
     frenzyTimer: 23,
@@ -699,6 +757,11 @@ function newGame() {
 
 function makeAlly(type, world) {
   const def = ALLY_DEFS[type];
+  // the squad armory grows with you: every cleared level and every weapon
+  // tier you buy filters down to their guns — damage, rate, range, mags, AP rounds
+  const tiers = Object.values(char.weaponTiers || {});
+  const avgTier = tiers.length ? tiers.reduce((sm, t) => sm + t, 0) / tiers.length : 0;
+  const gear = 1 + (char.campaignLevel || 0) * 0.16 + avgTier * 0.25;
   return {
     type, name: def.name,
     x: world.w / 2 + (Math.random() - 0.5) * 120,
@@ -707,16 +770,35 @@ function makeAlly(type, world) {
     radius: 13,
     angle: 0,
     fireCooldown: 0,
-    damage: def.damage,
-    fireInterval: def.fireInterval,
-    range: def.range,
+    damage: def.damage * gear,
+    fireInterval: def.fireInterval / (1 + (char.campaignLevel || 0) * 0.04),
+    range: def.range + (char.campaignLevel || 0) * 25,
+    pierce: 1 + Math.floor((char.campaignLevel || 0) / 3),
     color: def.color,
-    healAura: def.healAura, healRate: def.healRate,
-    grenade: def.grenade, grenadeTimer: def.grenade ? def.grenade.interval : 0,
-    mag: def.mag, magSize: def.mag, reloadTime: def.reloadTime, reloading: 0,
+    healAura: def.healAura, healRate: def.healRate ? def.healRate * gear : def.healRate,
+    grenade: def.grenade ? { ...def.grenade, damage: def.grenade.damage * gear } : undefined,
+    grenadeTimer: def.grenade ? def.grenade.interval : 0,
+    mag: Math.round(def.mag * gear), magSize: Math.round(def.mag * gear), reloadTime: def.reloadTime, reloading: 0,
     reviveTimer: 0,
     down: false,
   };
+}
+
+// squad synergy: living squadmates near you sharpen your own fighting —
+// the commander calls targets (+12% damage), the soldier tops your mags faster
+function squadDmgMult() {
+  for (const a of game.allies || []) {
+    if (a.type === 'commander' && !a.down &&
+        Math.hypot(a.x - game.player.x, a.y - game.player.y) < 320) return 1.12;
+  }
+  return 1;
+}
+function squadReloadMult() {
+  for (const a of game.allies || []) {
+    if (a.type === 'soldier' && !a.down &&
+        Math.hypot(a.x - game.player.x, a.y - game.player.y) < 320) return 0.8;
+  }
+  return 1;
 }
 
 function setupDrive() {
@@ -752,6 +834,25 @@ function startLevel() {
   decalCtx = decalCanvas.getContext('2d');
   decalCtx.scale(DECAL_SCALE, DECAL_SCALE);
   screenBlood = [];
+  // colored ambient light pools per level — the streets glow
+  {
+    const LIGHT_COLORS = {
+      city: '255,190,90', graveyard: '120,230,130', sewer: '90,230,200',
+      hospital: '150,210,255', base: '255,90,80', mall: '255,220,140',
+      subway: '120,150,255', prison: '255,230,120', docks: '110,220,255',
+      rooftops: '255,150,80',
+    };
+    const lc = LIGHT_COLORS[level().key] || '255,190,90';
+    for (let i = 0; i < 12; i++) {
+      game.lights.push({
+        x: 150 + Math.random() * (game.world.w - 300),
+        y: 150 + Math.random() * (game.world.h - 300),
+        r: 150 + Math.random() * 130,
+        c: lc,
+        flicker: Math.random() * 6.28,
+      });
+    }
+  }
   // lived-in streets: oil stains, scorch and grime baked in from the start
   for (let i = 0; i < (char.campaignLevel === 0 ? 45 : 90); i++) {
     const gx = Math.random() * game.world.w;
@@ -1010,6 +1111,7 @@ function explode(x, y, radius, damage, hurtsPlayer) {
   const g = game;
   const killsBefore = g.kills;
   g.explosions.push({ x, y, r: radius, t: 0.45 });
+  rumble(0.45, 0.8, 130);
   if (SPRITES.scorch) {
     decalCtx.save();
     decalCtx.translate(x, y);
@@ -1083,6 +1185,7 @@ function damagePlayer(dmg) {
   p.hp -= dmg;
   p.hurtFlash = 0.25;
   addShake(5);
+  rumble(0.8, 0.5, 140);
   g.streak = 0; // a hit to HEALTH resets the killstreak
   addScreenBlood(1);
   spawnBlood(p.x, p.y, 8, '#c62828');
@@ -1351,7 +1454,7 @@ function update(dt) {
       if (p.reserve[p.weapon] !== Infinity) p.reserve[p.weapon] -= take;
     }
   } else if ((wasPressed('r') || gpPressed('x')) && p.mags[p.weapon] < ws.magSize && p.reserve[p.weapon] > 0) {
-    p.reloading = ws.reloadTime;
+    p.reloading = ws.reloadTime * squadReloadMult();
     sfx.playReload();
   }
 
@@ -1383,6 +1486,7 @@ function update(dt) {
         p.vx -= Math.cos(p.angle) * 130;
         p.vy -= Math.sin(p.angle) * 130;
         addShake(3);
+        rumble(0.25, 0.6, 70);
       } else {
         addShake(0.5);
       }
@@ -1400,13 +1504,13 @@ function update(dt) {
           y: p.y + Math.sin(p.angle) * (p.radius + 10),
           vx: Math.cos(a) * ws.bulletSpeed,
           vy: Math.sin(a) * ws.bulletSpeed,
-          damage: ws.damage, color: ws.color, life: ws.mortar ? (ws.rocket ? 1.4 : 0.85) : 1.2,
+          damage: ws.damage * squadDmgMult(), color: ws.color, life: ws.mortar ? (ws.rocket ? 1.4 : 0.85) : 1.2,
           pierce: ws.pierce ?? 1, hit: new Set(), friendly: false,
           mortar: !!ws.mortar, rocket: !!ws.rocket,
         });
       }
       if (p.mags[p.weapon] === 0 && p.reserve[p.weapon] > 0) {
-        p.reloading = ws.reloadTime;
+        p.reloading = ws.reloadTime * squadReloadMult();
         sfx.playReload();
       }
     }
@@ -1984,9 +2088,10 @@ function update(dt) {
           g.bullets.push({
             x: a.x + Math.cos(a.angle) * 20, y: a.y + Math.sin(a.angle) * 20,
             vx: Math.cos(sp) * 1200, vy: Math.sin(sp) * 1200,
-            damage: mirror ? mirror.damage * 0.6 : a.damage,
+            damage: mirror ? mirror.damage * 0.75 : a.damage,
             color: mirror ? mirror.color : a.color, life: 1.0,
-            pierce: mirror ? mirror.pierce : a.type === 'commander' ? 2 : 1, hit: new Set(), friendly: true,
+            pierce: Math.max(mirror ? mirror.pierce || 1 : 1, a.pierce || 1, a.type === 'commander' ? 2 : 1),
+            hit: new Set(), friendly: true,
           });
         }
       }
@@ -2227,10 +2332,12 @@ function update(dt) {
         if (b.hit.size >= b.pierce) b.life = 0;
         spawnBlood(b.x, b.y, 6, '#7b1d1d', dir);
         if (!b.friendly) {
+          // damage tiers paint the numbers: white -> yellow -> orange -> red
+          const tierColor = crit ? '#ffd740' : dmg < 25 ? '#e8e8e8' : dmg < 60 ? '#ffee58' : dmg < 150 ? '#ff9100' : '#ff5252';
           g.dmgNumbers.push({
             x: z.x + (Math.random() - 0.5) * 16, y: z.y - z.radius,
             txt: crit ? `${dmg}!` : `${dmg}`,
-            color: crit ? '#ffd740' : '#fff',
+            color: tierColor,
             life: crit ? 1 : 0.7, vy: -60,
           });
         }
@@ -2412,7 +2519,9 @@ function killZombie(z, dirAngle) {
   g.killMarks.push({ x: z.x, y: z.y, t: 0.65, big: bigKill, r: Math.max(24, xr), rot: (Math.random() - 0.5) * 0.7 });
   // the combo number itself pops at the kill site
   if (g.combo >= 2) {
-    g.dmgNumbers.push({ x: z.x, y: z.y + 14, txt: `×${g.combo}`, color: '#ff9100', life: 0.7, vy: -34 });
+    // rainbow chain numbers past 25
+    const cc = g.combo >= 25 ? `hsl(${(g.combo * 24) % 360},100%,62%)` : '#ff9100';
+    g.dmgNumbers.push({ x: z.x, y: z.y + 14, txt: `×${g.combo}`, color: cc, life: 0.7, vy: -34 });
   }
   if (bigKill) {
     hitStopT = Math.max(hitStopT, 0.06);
@@ -2558,7 +2667,7 @@ function drawGround() {
   const ground = getImage(level().ground);
   const tile = 256;
   if (ground) {
-    ctx.globalAlpha = 0.35;
+    ctx.globalAlpha = 0.5;
     const x0 = Math.floor(cam.x / tile) * tile;
     const y0 = Math.floor(cam.y / tile) * tile;
     for (let x = x0; x < cam.x + view.w; x += tile)
@@ -2584,9 +2693,29 @@ function drawGround() {
   ctx.strokeRect(2, 2, g.world.w - 4, g.world.h - 4);
   ctx.drawImage(decalCanvas, 0, 0, g.world.w, g.world.h);
   drawProps();
+  // light pools wash the streets in the level's color
+  ctx.globalCompositeOperation = 'lighter';
+  for (const li of g.lights || []) {
+    if (li.x + li.r < cam.x || li.x - li.r > cam.x + view.w || li.y + li.r < cam.y || li.y - li.r > cam.y + view.h) continue;
+    const fl = 0.1 + 0.035 * Math.sin(performance.now() / 600 + li.flicker);
+    const lg = ctx.createRadialGradient(li.x, li.y, 8, li.x, li.y, li.r);
+    lg.addColorStop(0, `rgba(${li.c},${fl})`);
+    lg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(li.x - li.r, li.y - li.r, li.r * 2, li.r * 2);
+  }
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 const CAR_COLORS = ['#4e4448', '#3e4a55', '#5a4a3a', '#46524a', '#52404f'];
+
+// prop kinds rendered with generated hi-fi art (procedural box fallback)
+const SPRITE_PROPS = new Set([
+  'wreck', 'statue', 'bus', 'rubble', 'dumpster', 'barricade',
+  'corpsepile', 'ambulance', 'vending',
+  'fountain', 'kiosk', 'traincar', 'watchtower', 'container', 'crane',
+  'helipad', 'acunit', 'mausoleum', 'tank', 'tent', 'sewergrate', 'waterpool',
+]);
 
 function drawProps() {
   for (const pr of game.props) {
@@ -2631,9 +2760,7 @@ function drawProps() {
         ctx.fillText(`[F] UNLOCK ⚙${pr.cost}`, dcx, dcy - 16);
         ctx.textBaseline = 'top';
       }
-    } else if (pr.kind === 'wreck' || pr.kind === 'statue' || pr.kind === 'bus' ||
-        pr.kind === 'rubble' || pr.kind === 'dumpster' || pr.kind === 'barricade' ||
-        pr.kind === 'corpsepile' || pr.kind === 'ambulance' || pr.kind === 'vending') {
+    } else if (SPRITE_PROPS.has(pr.kind)) {
       const sp = SPRITES[pr.kind];
       if (sp) {
         ctx.save();
@@ -2641,7 +2768,7 @@ function drawProps() {
         drawSpriteFit(sp, pr.w * 1.25, pr.h * 1.25);
         ctx.restore();
       } else {
-        ctx.fillStyle = { wreck: '#2e2a26', statue: '#3c4038', bus: '#36424e', rubble: '#4a4640', dumpster: '#2f4a35', barricade: '#5d4a32' }[pr.kind] || '#3c4038';
+        ctx.fillStyle = { wreck: '#2e2a26', statue: '#3c4038', bus: '#36424e', rubble: '#4a4640', dumpster: '#2f4a35', barricade: '#5d4a32', container: '#7a4030', traincar: '#5a3030', watchtower: '#3a4046', tank: '#3c4434', tent: '#44503c', fountain: '#3a4248', kiosk: '#4c4438', mausoleum: '#3e463e', crane: '#6a5a20', acunit: '#454f5a', helipad: '#2c3136', sewergrate: '#33393c', waterpool: '#1e4034' }[pr.kind] || '#3c4038';
         ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
       }
     } else if (pr.kind === 'building' || pr.kind === 'crypt' || pr.kind === 'bunker') {
@@ -2815,10 +2942,18 @@ function drawCorpse(co) {
   ctx.globalAlpha = 1;
 }
 
+function entityShadow(r) {
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath();
+  ctx.ellipse(2, r * 0.55, r * 0.95, r * 0.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 function drawZombie(z) {
   const slowed = game.time < z.slowUntil;
   ctx.save();
   ctx.translate(z.x, z.y);
+  entityShadow(z.radius);
   // per-zombie gradient glows get expensive past ~150 on screen
   if (game.zombies.length < 150) {
     const grad = ctx.createRadialGradient(0, 0, z.radius * 0.3, 0, 0, z.radius * 2.2);
@@ -2894,6 +3029,7 @@ function drawZombie(z) {
 function drawCivilian(c) {
   ctx.save();
   ctx.translate(c.x, c.y);
+  entityShadow(c.radius);
   ctx.rotate(c.angle + Math.sin(c.wobble * 2.4) * 0.16);
   const sq = Math.sin(c.wobble * 4.8) * 0.04;
   ctx.scale(1 + sq, 1 - sq);
@@ -2931,15 +3067,18 @@ function drawAlly(a) {
     ctx.restore();
     return;
   }
+  entityShadow(a.radius);
   ctx.rotate(a.angle + Math.sin(a.walkPhase || 0) * 0.07);
   const sq = Math.sin((a.walkPhase || 0) * 2) * 0.03;
   ctx.scale(1 + sq, 1 - sq);
   const aBase = a.sprite || a.type;
-  const aWalk = SPRITES[aBase + '_walk'];
+  const aAf = animFrames(aBase);
   const aMoving = (a.walkPhase || 0) !== (a._lastWP || 0);
   a._lastWP = a.walkPhase || 0;
   // ally stride: walkPhase is distance*0.05, so /1.5 ≈ one frame per 30px
-  const sprite = (aWalk && aMoving && Math.floor((a.walkPhase || 0) / 1.5) % 2 === 1 ? aWalk : SPRITES[aBase]);
+  const sprite = aAf
+    ? (aMoving && Math.floor((a.walkPhase || 0) / 1.5) % 2 === 1 ? aAf.walk : aAf.idle)
+    : SPRITES[aBase];
   if (sprite) drawSprite(sprite, a.radius * 3.4);
   else {
     ctx.fillStyle = a.color;
@@ -2971,6 +3110,10 @@ function drawAlly(a) {
 
 function drawPlayer() {
   const p = game.player;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  entityShadow(p.radius);
+  ctx.restore();
   if (gameMode === 'drive') {
     ctx.save();
     ctx.translate(p.x, p.y);
@@ -3002,23 +3145,24 @@ function drawPlayer() {
   }
   ctx.save();
   ctx.translate(p.x, p.y);
-  // gait: rock around the aim axis + squash-stretch step bounce
-  const rock = Math.sin(p.walkPhase) * 0.035;
-  const squish = Math.sin(p.walkPhase * 2) * 0.035;
+  // gait: step-synced bounce + lean into the stride; frames carry the legs
+  const strideT = ((p.animDist || 0) % 30) / 30;
+  const hop = 1 + Math.abs(Math.sin(strideT * Math.PI)) * 0.05 * Math.min(1, Math.hypot(p.vx, p.vy) / 220);
+  const rock = Math.sin(p.walkPhase) * 0.02;
   ctx.rotate(p.angle + rock);
-  ctx.scale(1 + squish, 1 - squish);
+  ctx.scale(hop, hop);
   if (game.time < p.invulnUntil) ctx.globalAlpha = 0.55; // dash ghosting
   const spriteName = heroById(char.heroId).sprite;
   const spd2 = Math.hypot(p.vx, p.vy);
-  const walkFrame = SPRITES[spriteName + '_walk'];
-  const runFrame = SPRITES[spriteName + '_run'];
-  // 3-state sheet: idle -> [base,walk] cycle -> [walk,run] sprint cycle
-  let sprite = SPRITES[spriteName];
-  if (spd2 > 40 && walkFrame) {
+  const af = animFrames(spriteName);
+  // 3-state sheet: idle -> [base,walk] cycle -> [walk,run] sprint cycle.
+  // every frame is the same padded canvas size, so the body never jitters
+  let sprite = af ? af.idle : SPRITES[spriteName];
+  if (spd2 > 40 && af) {
     // one stride per ~30px travelled — correct cadence at every speed
     const odd = Math.floor((p.animDist || 0) / 30) % 2 === 1;
-    if (spd2 > 300 && runFrame) sprite = odd ? runFrame : walkFrame;
-    else sprite = odd ? walkFrame : SPRITES[spriteName];
+    if (spd2 > 300) sprite = odd ? af.run : af.walk;
+    else sprite = odd ? af.walk : af.idle;
   }
   sprite = sprite || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
   if (sprite) {
@@ -3859,13 +4003,33 @@ function drawCharSelect() {
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = grad;
     ctx.fillRect(x + 4, y + 4, cw - 8, chh - 58);
-    const sprite = SPRITES[hero.sprite];
-    if (sprite) {
-      // drawn upright (sprites face right), contained in a uniform box
+    // living hero portrait: video loop when ready, painted still, sprite fallback
+    const portrait = getImage(`portraits/${hero.id}.png`);
+    const pv = portraitVideo(hero.id);
+    if (!pv._broken && pv.paused) pv.play().catch(() => {});
+    const useVid = !pv._broken && pv.readyState >= 2 && pv.videoWidth > 0;
+    if (portrait || useVid) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x + 2, y + 2, cw - 4, chh - 58);
+      ctx.clip();
+      if (isOwnHero) ctx.globalAlpha = 0.3;
+      const src = useVid ? pv : portrait;
+      const iw = useVid ? pv.videoWidth : portrait.naturalWidth;
+      const ih = useVid ? pv.videoHeight : portrait.naturalHeight;
+      const ps = Math.max((cw - 4) / iw, (chh - 58) / ih);
+      ctx.drawImage(src, x + cw / 2 - (iw * ps) / 2, y + 2, iw * ps, ih * ps);
+      const fg = ctx.createLinearGradient(0, y + chh - 110, 0, y + chh - 56);
+      fg.addColorStop(0, 'rgba(10,12,16,0)');
+      fg.addColorStop(1, 'rgba(10,12,16,0.95)');
+      ctx.fillStyle = fg;
+      ctx.fillRect(x + 2, y + chh - 110, cw - 4, 54);
+      ctx.restore();
+    } else if (SPRITES[hero.sprite]) {
       ctx.save();
       ctx.translate(px, py);
       if (isOwnHero) ctx.globalAlpha = 0.3;
-      drawSpriteFit(sprite, cw * 0.66, (chh - 64) * 0.86);
+      drawSpriteFit(SPRITES[hero.sprite], cw * 0.66, (chh - 64) * 0.86);
       ctx.restore();
     } else {
       ctx.fillStyle = '#37474f';
@@ -4272,6 +4436,7 @@ function render(dt) {
   if (state === 'title') return drawTitle();
   if (state === 'levelselect') return drawLevelSelect();
   if (state === 'charselect') return drawCharSelect();
+  for (const v of Object.values(portraitVids)) if (!v.paused) v.pause();
   if (state === 'cutscene') return drawCutscene(dt);
   if (state === 'levelintro') return drawLevelIntro();
   if (state === 'victory') return drawVictory();
@@ -4577,7 +4742,7 @@ function render(dt) {
     }
   }
   for (const n of game.dmgNumbers) {
-    const crit = n.color === '#ffd740';
+    const crit = n.color === '#ffd740' || n.color.startsWith('hsl');
     const pop = 1 + Math.max(0, n.life - (crit ? 0.7 : 0.5)) * 2.2; // punchy scale-in
     ctx.globalAlpha = Math.min(1, n.life * 2.5);
     ctx.font = `bold ${Math.round((crit ? 26 : 16) * pop)}px monospace`;
@@ -4599,6 +4764,14 @@ function render(dt) {
   if (game.time < game.frenzyUntil) {
     const pulse = 0.05 + 0.04 * Math.sin(performance.now() / 90);
     ctx.fillStyle = `rgba(255,23,68,${pulse})`;
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
+  // cinematic grade: corner vignette + a whisper of warm light
+  {
+    const vg = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.42, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.75);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.34)');
+    ctx.fillStyle = vg;
     ctx.fillRect(0, 0, view.w, view.h);
   }
   if (game.nukeFlash > 0) {
