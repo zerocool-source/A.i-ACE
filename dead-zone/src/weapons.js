@@ -57,13 +57,18 @@ export const WEAPONS = {
     fireInterval: 0.6, reloadTime: 2.6, spread: 0.04, pellets: 1,
     bulletSpeed: 900, color: '#9ccc65', pierce: 1, price: 1000, mortar: true,
   },
+  mlauncher: {
+    name: 'MISSILE LAUNCHER', key: 'm', auto: false, damage: 60, magSize: 3,
+    fireInterval: 1.0, reloadTime: 2.8, spread: 0.01, pellets: 1,
+    bulletSpeed: 720, color: '#ff5252', pierce: 1, price: 2200, mortar: true, rocket: true,
+  },
 };
 
-export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun', 'sniper', 'mortar', 'glauncher'];
+export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun', 'sniper', 'mortar', 'glauncher', 'mlauncher'];
 
 // reserve ammo carried per weapon at level start; the pistol never runs dry
 export const AMMO_RESERVE = {
   pistol: Infinity, rifle: 150, shotgun: 42, smg: 210, magnum: 36,
-  minigun: 480, flak: 56, railgun: 20, sniper: 25, mortar: 18, glauncher: 36,
+  minigun: 480, flak: 56, railgun: 20, sniper: 25, mortar: 18, glauncher: 36, mlauncher: 27,
 };
 export const STARTING_WEAPONS = ['pistol', 'rifle', 'shotgun', 'smg'];

@@ -111,6 +111,7 @@ export function shopCatalog(char, playerHp) {
       railgun: 'Pierces an entire horde in a straight line [8]',
       sniper: 'One shot, five kills, across the whole map [9]',
       mortar: 'Lobbed explosive shells — every round detonates [0]',
+      mlauncher: 'MISSILES. 30 rounds. Make each one count [M]',
     };
     items.push({
       id: 'buy-' + w,

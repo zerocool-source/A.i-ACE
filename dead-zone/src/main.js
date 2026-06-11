@@ -90,7 +90,12 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'drive_sports', 'drive_taxi', 'drive_police', 'drive_armored',
                     'player_walk', 'player_f_walk', 'hero_medic_walk', 'hero_builder_walk',
                     'hero_hacker_walk', 'hero_cop_walk', 'hero_biker_walk', 'hero_engineer_walk',
-                    'hero_veteran_walk', 'hero_athlete_walk']) {
+                    'hero_veteran_walk', 'hero_athlete_walk',
+                    'player_run', 'player_f_run', 'hero_medic_run', 'hero_builder_run',
+                    'hero_hacker_run', 'hero_cop_run', 'hero_biker_run', 'hero_engineer_run',
+                    'hero_veteran_run', 'hero_athlete_run',
+                    'killx', 'boom', 'walker_gore', 'runner_gore', 'brute_gore',
+                    'bus', 'rubble', 'dumpster', 'barricade']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -142,6 +147,26 @@ let screenBlood = []; // splatter stuck to the camera: {fx, fy, r, alpha}
 let gpFocus = 0; // gamepad focus index into uiButtons
 let cam = { x: 0, y: 0 };
 let shake = 0; // screen-shake magnitude, decays fast
+let lastSpoke = 0;
+
+const BARK_LINES = ['BOOM!', 'GET SOME!', 'EAT IT!', 'DOWN YOU GO!', 'HA!', 'NOT TODAY!', "WHO'S NEXT?!"];
+
+// the survivor talks after crazy kills — bubble + actual voice
+function bark(text) {
+  if (!game) return;
+  game.bark = { text, t: 1.3 };
+  const now = performance.now();
+  if (now - lastSpoke > 6000 && 'speechSynthesis' in window) {
+    lastSpoke = now;
+    try {
+      const u = new SpeechSynthesisUtterance(text.toLowerCase().replace(/[!?]/g, ''));
+      u.rate = 1.25;
+      u.pitch = 0.6;
+      u.volume = 0.85;
+      speechSynthesis.speak(u);
+    } catch { /* voice optional */ }
+  }
+}
 let hitStopT = 0; // micro freeze-frames on big kills
 
 function addShake(n) {
@@ -419,6 +444,13 @@ function placeProps(lv, world) {
       scatter(10, 36, 52, 36, 52, 'cabinet');
       break;
   }
+  // street dressing across most maps
+  if (['city', 'mall', 'prison', 'docks', 'base', 'rooftops'].includes(lv.key)) {
+    scatter(8, 40, 70, 40, 70, 'rubble', true);
+    scatter(5, 50, 64, 30, 40, 'dumpster');
+    scatter(6, 90, 130, 26, 36, 'barricade', true);
+  }
+  if (lv.key === 'city' || lv.key === 'docks') scatter(1 / af, 230, 270, 90, 110, 'bus');
   // one big landmark set-piece per map
   if (lv.key === 'city' || lv.key === 'base' || lv.key === 'docks') scatter(1 / af, 220, 260, 130, 160, 'wreck');
   if (lv.key === 'graveyard') scatter(1 / af, 120, 140, 120, 140, 'statue');
@@ -857,6 +889,7 @@ function spawnLevelZombie(type) {
     const big = type === 'brute' || type === 'butcher';
     z.radius = (big ? 21 : 17) + Math.random() * 2;
   }
+  z.goreSkin = Math.random() < 0.4; // bloodied variant when the art exists
   z.hp = z.maxHp = Math.round(z.hp * lv.hpMult);
   z.speed *= lv.speedMult;
   z.damage = Math.round(z.damage * (1 + char.campaignLevel * 0.25));
@@ -935,6 +968,7 @@ function addScreenBlood(intensity = 1) {
 // AoE blast used by exploder zombies and BOOM's grenades
 function explode(x, y, radius, damage, hurtsPlayer) {
   const g = game;
+  const killsBefore = g.kills;
   g.explosions.push({ x, y, r: radius, t: 0.45 });
   addShake(Math.min(10, radius * 0.07));
   for (let sp3 = 0; sp3 < 8; sp3++) {
@@ -959,6 +993,7 @@ function explode(x, y, radius, damage, hurtsPlayer) {
       if (z.hp <= 0) killZombie(z, Math.atan2(z.y - y, z.x - x));
     }
   }
+  if (g.kills - killsBefore >= 3) bark(BARK_LINES[Math.floor(Math.random() * BARK_LINES.length)]);
   if (hurtsPlayer) {
     const p = g.player;
     const dp = Math.hypot(p.x - x, p.y - y);
@@ -1059,6 +1094,20 @@ function applyPickup(type) {
 }
 
 function goreKill(x, y, radius, dirAngle, big) {
+  // dismemberment chunks on big deaths
+  if (big && game.gibs.length < 240) {
+    for (let i = 0; i < 4; i++) {
+      const la = Math.random() * Math.PI * 2;
+      game.gibs.push({
+        x, y,
+        vx: Math.cos(la) * (180 + Math.random() * 220),
+        vy: Math.sin(la) * (180 + Math.random() * 220),
+        rot: Math.random() * 6.28, rotV: (Math.random() - 0.5) * 10,
+        size: 7 + Math.random() * 6, color: '#6d1313',
+        life: 0.6 + Math.random() * 0.4,
+      });
+    }
+  }
   sfx.playSquelch();
   spawnBlood(x, y, big ? 50 : 22, '#7b1d1d', dirAngle);
   spawnGibs(x, y, big ? 18 : 8, dirAngle);
@@ -1295,9 +1344,9 @@ function update(dt) {
           y: p.y + Math.sin(p.angle) * (p.radius + 10),
           vx: Math.cos(a) * ws.bulletSpeed,
           vy: Math.sin(a) * ws.bulletSpeed,
-          damage: ws.damage, color: ws.color, life: ws.mortar ? 0.85 : 1.2,
+          damage: ws.damage, color: ws.color, life: ws.mortar ? (ws.rocket ? 1.4 : 0.85) : 1.2,
           pierce: ws.pierce ?? 1, hit: new Set(), friendly: false,
-          mortar: !!ws.mortar,
+          mortar: !!ws.mortar, rocket: !!ws.rocket,
         });
       }
       if (p.mags[p.weapon] === 0 && p.reserve[p.weapon] > 0) {
@@ -2120,9 +2169,16 @@ function update(dt) {
     }
   }
   for (const b of g.bullets) {
+    if (b.rocket && Math.random() < 0.8) {
+      g.particles.push({
+        x: b.x - b.vx * 0.015, y: b.y - b.vy * 0.015,
+        vx: (Math.random() - 0.5) * 30, vy: (Math.random() - 0.5) * 30,
+        life: 0.3 + Math.random() * 0.2, color: 'rgba(160,160,160,0.5)', size: 5,
+      });
+    }
     if (b.mortar && b.life <= 0 && !b.boomed) {
       b.boomed = true;
-      explode(b.x, b.y, 95, 170, false); // every mortar round detonates
+      explode(b.x, b.y, b.rocket ? 140 : 95, b.rocket ? 300 : 170, false);
     }
   }
   g.bullets = g.bullets.filter(
@@ -2239,6 +2295,7 @@ function killZombie(z, dirAngle) {
   g.comboBest = Math.max(g.comboBest, g.combo);
   const HYPE = { 10: 'RAMPAGE!', 25: 'MASSACRE!', 50: 'UNSTOPPABLE!', 100: 'GODLIKE!' };
   if (HYPE[g.combo]) {
+    bark(HYPE[g.combo]);
     banner(HYPE[g.combo], `COMBO ×${g.combo} — +${g.combo * 10} SCORE`, '#ffd740');
     g.score += g.combo * 10;
     g.hypeFlash = 0.3;
@@ -2264,7 +2321,7 @@ function killZombie(z, dirAngle) {
   const bigKill = z.radius > 19 || z.super;
   // kill X grows with your combo — at high chains they get HUGE
   const xr = (bigKill ? 26 : 13) * (1 + Math.min(2.2, g.combo * 0.045));
-  g.killMarks.push({ x: z.x, y: z.y, t: 0.4, big: bigKill, r: xr });
+  g.killMarks.push({ x: z.x, y: z.y, t: 0.4, big: bigKill, r: xr, rot: (Math.random() - 0.5) * 0.7 });
   if (bigKill) {
     hitStopT = Math.max(hitStopT, 0.06);
     addShake(4);
@@ -2332,6 +2389,7 @@ function killZombie(z, dirAngle) {
     g.score += 5;
     hitStopT = Math.max(hitStopT, 0.05);
     addShake(3);
+    if (Math.random() < 0.3) bark(BARK_LINES[Math.floor(Math.random() * BARK_LINES.length)]);
     g.dmgNumbers.push({ x: z.x, y: z.y - z.radius - 10, txt: 'HEADSHOT', color: '#ff5252', life: 1.1, vy: -55 });
     const ha = (dirAngle ?? 0) + (Math.random() - 0.5) * 0.8;
     g.gibs.push({
@@ -2479,7 +2537,8 @@ function drawProps() {
         ctx.fillText(`[F] UNLOCK ⚙${pr.cost}`, dcx, dcy - 16);
         ctx.textBaseline = 'top';
       }
-    } else if (pr.kind === 'wreck' || pr.kind === 'statue') {
+    } else if (pr.kind === 'wreck' || pr.kind === 'statue' || pr.kind === 'bus' ||
+        pr.kind === 'rubble' || pr.kind === 'dumpster' || pr.kind === 'barricade') {
       const sp = SPRITES[pr.kind];
       if (sp) {
         ctx.save();
@@ -2487,7 +2546,7 @@ function drawProps() {
         drawSpriteFit(sp, pr.w * 1.25, pr.h * 1.25);
         ctx.restore();
       } else {
-        ctx.fillStyle = pr.kind === 'wreck' ? '#2e2a26' : '#3c4038';
+        ctx.fillStyle = { wreck: '#2e2a26', statue: '#3c4038', bus: '#36424e', rubble: '#4a4640', dumpster: '#2f4a35', barricade: '#5d4a32' }[pr.kind] || '#3c4038';
         ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
       }
     } else if (pr.kind === 'building' || pr.kind === 'crypt' || pr.kind === 'bunker') {
@@ -2684,7 +2743,7 @@ function drawZombie(z) {
   }
   const { t: target } = zombieTarget(z);
   const a = Math.atan2(target.y - z.y, target.x - z.x);
-  const sprite = SPRITES[z.type];
+  const sprite = (z.goreSkin && SPRITES[z.type + '_gore']) || SPRITES[z.type];
   if (sprite) {
     ctx.save();
     const rear = z.windup ? -0.3 * Math.sin((0.33 - z.windup) / 0.33 * Math.PI) : 0;
@@ -2854,10 +2913,17 @@ function drawPlayer() {
   ctx.scale(1 + squish, 1 - squish);
   if (game.time < p.invulnUntil) ctx.globalAlpha = 0.55; // dash ghosting
   const spriteName = heroById(char.heroId).sprite;
-  const moving = Math.hypot(p.vx, p.vy) > 40;
+  const spd2 = Math.hypot(p.vx, p.vy);
   const walkFrame = SPRITES[spriteName + '_walk'];
-  const useWalk = walkFrame && moving && Math.floor(p.walkPhase * 1.6) % 2 === 1;
-  const sprite = (useWalk ? walkFrame : SPRITES[spriteName]) || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
+  const runFrame = SPRITES[spriteName + '_run'];
+  // 3-state sheet: idle -> [base,walk] cycle -> [walk,run] sprint cycle
+  let sprite = SPRITES[spriteName];
+  if (spd2 > 40 && walkFrame) {
+    const odd = Math.floor(p.walkPhase * 1.6) % 2 === 1;
+    if (spd2 > 300 && runFrame) sprite = odd ? runFrame : walkFrame;
+    else sprite = odd ? walkFrame : SPRITES[spriteName];
+  }
+  sprite = sprite || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
   if (sprite) {
     drawSprite(sprite, p.radius * 3.6);
   } else {
@@ -4241,6 +4307,29 @@ function render(dt) {
     ctx.restore();
   }
   drawPlayer();
+  // speech bubble bark
+  if (game.bark && game.bark.t > 0) {
+    game.bark.t -= dt;
+    const p2 = game.player;
+    ctx.font = 'bold 14px monospace';
+    const bw3 = ctx.measureText(game.bark.text).width + 26;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, game.bark.t * 3);
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(p2.x - bw3 / 2, p2.y - p2.radius - 52, bw3, 26, 8);
+    else ctx.rect(p2.x - bw3 / 2, p2.y - p2.radius - 52, bw3, 26);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(p2.x - 5, p2.y - p2.radius - 27);
+    ctx.lineTo(p2.x + 6, p2.y - p2.radius - 27);
+    ctx.lineTo(p2.x, p2.y - p2.radius - 18);
+    ctx.fill();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#111';
+    ctx.fillText(game.bark.text, p2.x, p2.y - p2.radius - 39);
+    ctx.restore();
+  }
   // explosions: flash + expanding ring (screams are a pale ring only)
   // (world entities above are culled to the camera; effects below are cheap)
   for (const ex of game.explosions) {
@@ -4252,6 +4341,14 @@ function render(dt) {
       ctx.arc(ex.x, ex.y, ex.r * t, 0, Math.PI * 2);
       ctx.stroke();
       continue;
+    }
+    if (SPRITES.boom) {
+      ctx.save();
+      ctx.translate(ex.x, ex.y);
+      ctx.globalAlpha = 1 - t;
+      drawSpriteFit(SPRITES.boom, ex.r * 2.2 * (0.55 + t * 0.8), ex.r * 2.2 * (0.55 + t * 0.8));
+      ctx.restore();
+      ctx.globalAlpha = 1;
     }
     ctx.fillStyle = `rgba(255,171,64,${(1 - t) * 0.5})`;
     ctx.beginPath();
@@ -4301,14 +4398,24 @@ function render(dt) {
   for (const km of game.killMarks) {
     const t = km.t / 0.4;
     const r = (km.r || (km.big ? 26 : 13)) * (1.6 - t * 0.6);
-    ctx.strokeStyle = `rgba(244,67,54,${t})`;
-    ctx.lineWidth = km.big ? 6 : 3.5;
-    ctx.beginPath();
-    ctx.moveTo(km.x - r, km.y - r);
-    ctx.lineTo(km.x + r, km.y + r);
-    ctx.moveTo(km.x + r, km.y - r);
-    ctx.lineTo(km.x - r, km.y + r);
-    ctx.stroke();
+    if (SPRITES.killx) {
+      ctx.save();
+      ctx.translate(km.x, km.y);
+      ctx.rotate(km.rot || 0);
+      ctx.globalAlpha = t;
+      drawSpriteFit(SPRITES.killx, r * 2.4, r * 2.4);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.strokeStyle = `rgba(244,67,54,${t})`;
+      ctx.lineWidth = km.big ? 6 : 3.5;
+      ctx.beginPath();
+      ctx.moveTo(km.x - r, km.y - r);
+      ctx.lineTo(km.x + r, km.y + r);
+      ctx.moveTo(km.x + r, km.y - r);
+      ctx.lineTo(km.x - r, km.y + r);
+      ctx.stroke();
+    }
   }
   for (const n of game.dmgNumbers) {
     const crit = n.color === '#ffd740';
