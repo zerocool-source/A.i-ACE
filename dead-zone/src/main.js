@@ -97,6 +97,10 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'hero_hacker_run', 'hero_cop_run', 'hero_biker_run', 'hero_engineer_run',
                     'hero_veteran_run', 'hero_athlete_run',
                     'killx', 'killx2', 'comboskull', 'boom', 'walker_gore', 'runner_gore', 'brute_gore',
+                    'granny_gore', 'cop_gore', 'butcher_gore', 'stalker_gore',
+                    'gore_arm', 'gore_leg', 'gore_head', 'gore_torso', 'gore_chunk',
+                    'splat1', 'splat2', 'splat3', 'scorch', 'fire', 'muzzle',
+                    'corpsepile', 'ambulance', 'vending', 'dragtrail', 'entrails',
                     'bus', 'rubble', 'dumpster', 'barricade']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
@@ -275,7 +279,8 @@ function level() {
 }
 
 function banner(text, sub, color = '#d32f2f') {
-  banners.push({ text, sub, t: 2.4, color });
+  banners.push({ text, sub, t: 2.0, color });
+  if (banners.length > 4) banners.splice(1, banners.length - 4); // keep current + 3 queued
 }
 
 // ---- game setup --------------------------------------------------------------
@@ -396,10 +401,10 @@ function placeProps(lv, world) {
   };
   switch (lv.key) {
     case 'city':
-      edgeBlocks(9, 'building', 280, 180);
-      midBlocks(7, 'building', 280, 180);
-      scatter(16, 64, 80, 32, 40, 'car');
-      scatter(6, 36, 48, 36, 48, 'crate', true);
+      edgeBlocks(8, 'building', 280, 180);
+      midBlocks(5, 'building', 280, 180);
+      scatter(9, 64, 80, 32, 40, 'car');
+      scatter(3, 36, 48, 36, 48, 'crate', true);
       break;
     case 'graveyard':
       edgeBlocks(4, 'crypt', 180, 130);
@@ -451,13 +456,20 @@ function placeProps(lv, world) {
       scatter(10, 36, 52, 36, 52, 'cabinet');
       break;
   }
-  // street dressing across most maps
+  // street dressing — light touch on level 1, denser later
+  const dress = lv.key === 'city' ? 0.5 : 1;
   if (['city', 'mall', 'prison', 'docks', 'base', 'rooftops'].includes(lv.key)) {
-    scatter(8, 40, 70, 40, 70, 'rubble', true);
-    scatter(5, 50, 64, 30, 40, 'dumpster');
-    scatter(6, 90, 130, 26, 36, 'barricade', true);
+    scatter(Math.round(8 * dress), 40, 70, 40, 70, 'rubble', true);
+    scatter(Math.round(4 * dress), 50, 64, 30, 40, 'dumpster');
+    scatter(Math.round(5 * dress), 90, 130, 26, 36, 'barricade', true);
   }
   if (lv.key === 'city' || lv.key === 'docks') scatter(1 / af, 230, 270, 90, 110, 'bus');
+  if (['hospital', 'mall', 'subway'].includes(lv.key)) {
+    scatter(3, 60, 90, 50, 70, 'corpsepile', true);
+    scatter(2, 40, 56, 56, 80, 'vending');
+  }
+  if (lv.key === 'city') scatter(1, 60, 90, 50, 70, 'corpsepile', true);
+  if (lv.key === 'city' || lv.key === 'hospital') scatter(1 / af, 150, 180, 70, 90, 'ambulance');
   // one big landmark set-piece per map
   if (lv.key === 'city' || lv.key === 'base' || lv.key === 'docks') scatter(1 / af, 220, 260, 130, 160, 'wreck');
   if (lv.key === 'graveyard') scatter(1 / af, 120, 140, 120, 140, 'statue');
@@ -741,7 +753,7 @@ function startLevel() {
   decalCtx.scale(DECAL_SCALE, DECAL_SCALE);
   screenBlood = [];
   // lived-in streets: oil stains, scorch and grime baked in from the start
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < (char.campaignLevel === 0 ? 45 : 90); i++) {
     const gx = Math.random() * game.world.w;
     const gy = Math.random() * game.world.h;
     decalCtx.fillStyle = Math.random() < 0.5 ? 'rgba(20,22,26,0.35)' : 'rgba(38,30,22,0.3)';
@@ -894,7 +906,7 @@ function spawnLevelZombie(type) {
   // brutes/butchers read bigger, bosses tower
   if (type !== 'boss') {
     const big = type === 'brute' || type === 'butcher';
-    z.radius = (big ? 21 : 17) + Math.random() * 2;
+    z.radius = (big ? 24 : 19) + Math.random() * 2; // no small zombies
   }
   z.goreSkin = Math.random() < 0.4; // bloodied variant when the art exists
   z.hp = z.maxHp = Math.round(z.hp * lv.hpMult);
@@ -949,6 +961,27 @@ function spawnGibs(x, y, n, dirAngle = null) {
 }
 
 function stampDecal(x, y, r, heavy = false) {
+  // HD generated splats when available
+  const splats = [SPRITES.splat1, SPRITES.splat2, SPRITES.splat3].filter(Boolean);
+  if (splats.length) {
+    const sp = splats[Math.floor(Math.random() * splats.length)];
+    const size = r * (heavy ? 6 : 3.6);
+    decalCtx.save();
+    decalCtx.translate(x, y);
+    decalCtx.rotate(Math.random() * 6.28);
+    decalCtx.globalAlpha = heavy ? 0.8 : 0.6;
+    decalCtx.drawImage(sp, -size / 2, -size / 2, size, size);
+    decalCtx.restore();
+    if (heavy && SPRITES.entrails && Math.random() < 0.25) {
+      decalCtx.save();
+      decalCtx.translate(x + (Math.random() - 0.5) * 30, y + (Math.random() - 0.5) * 30);
+      decalCtx.rotate(Math.random() * 6.28);
+      decalCtx.globalAlpha = 0.85;
+      decalCtx.drawImage(SPRITES.entrails, -r, -r, r * 2, r * 2);
+      decalCtx.restore();
+    }
+    return;
+  }
   decalCtx.fillStyle = heavy ? 'rgba(110, 10, 10, 0.7)' : 'rgba(90, 12, 12, 0.55)';
   const blots = heavy ? 14 : 7;
   for (let i = 0; i < blots; i++) {
@@ -977,6 +1010,19 @@ function explode(x, y, radius, damage, hurtsPlayer) {
   const g = game;
   const killsBefore = g.kills;
   g.explosions.push({ x, y, r: radius, t: 0.45 });
+  if (SPRITES.scorch) {
+    decalCtx.save();
+    decalCtx.translate(x, y);
+    decalCtx.rotate(Math.random() * 6.28);
+    decalCtx.globalAlpha = 0.55;
+    decalCtx.drawImage(SPRITES.scorch, -radius, -radius, radius * 2, radius * 2);
+    decalCtx.restore();
+  }
+  // burning ground lingers after big blasts
+  if (radius >= 110 && (g.fires || []).length < 10) {
+    g.fires = g.fires || [];
+    g.fires.push({ x, y, r: radius * 0.45, until: g.time + 3 });
+  }
   addShake(Math.min(10, radius * 0.07));
   for (let sp3 = 0; sp3 < 8; sp3++) {
     const a3 = Math.random() * Math.PI * 2;
@@ -1101,8 +1147,9 @@ function applyPickup(type) {
 }
 
 function goreKill(x, y, radius, dirAngle, big) {
-  // dismemberment chunks on big deaths
+  // dismemberment: REAL severed-part sprites fly on big deaths
   if (big && game.gibs.length < 240) {
+    const parts = ['gore_arm', 'gore_leg', 'gore_head', 'gore_torso', 'gore_chunk'].filter((k) => SPRITES[k]);
     for (let i = 0; i < 4; i++) {
       const la = Math.random() * Math.PI * 2;
       game.gibs.push({
@@ -1110,8 +1157,9 @@ function goreKill(x, y, radius, dirAngle, big) {
         vx: Math.cos(la) * (180 + Math.random() * 220),
         vy: Math.sin(la) * (180 + Math.random() * 220),
         rot: Math.random() * 6.28, rotV: (Math.random() - 0.5) * 10,
-        size: 7 + Math.random() * 6, color: '#6d1313',
-        life: 0.6 + Math.random() * 0.4,
+        size: 9 + Math.random() * 7, color: '#6d1313',
+        sprite: parts.length ? parts[Math.floor(Math.random() * parts.length)] : null,
+        life: 0.7 + Math.random() * 0.4,
       });
     }
   }
@@ -1259,6 +1307,7 @@ function update(dt) {
   // walk cycle + footstep dust, driven by real velocity
   const speedMag = Math.hypot(p.vx, p.vy);
   p.walkPhase += speedMag * dt * 0.05;
+  p.animDist = (p.animDist || 0) + speedMag * dt; // frames step by DISTANCE
   p.stepAcc += speedMag * dt;
   if (p.stepAcc > 85 && speedMag > 40) {
     p.stepAcc = 0;
@@ -1869,20 +1918,20 @@ function update(dt) {
         a.shield = Math.min(a.shieldMax, a.shield + 10 * dt);
       }
       const called = g.time < (a.followUntil || 0);
-      if (called || dp > 1000) {
-        // recalled (or way out of range): hustle back to the player
+      if (called || dp > 620) {
+        // recalled (or drifting too far): hustle back — the sidekick FLOWS with you
         if (dp > 110) {
-          a.x += ((p.x - a.x) / dp) * 240 * dt;
-          a.y += ((p.y - a.y) / dp) * 240 * dt;
-          a.walkPhase = (a.walkPhase || 0) + 240 * dt * 0.05;
+          a.x += ((p.x - a.x) / dp) * 260 * dt;
+          a.y += ((p.y - a.y) / dp) * 260 * dt;
+          a.walkPhase = (a.walkPhase || 0) + 260 * dt * 0.05;
         }
       } else {
         a.roamT = (a.roamT || 0) - dt;
         if (a.roamT <= 0 || !a.roamTarget) {
           a.roamT = 5 + Math.random() * 4;
           a.roamTarget = {
-            x: Math.max(40, Math.min(g.world.w - 40, p.x + (Math.random() - 0.5) * 1400)),
-            y: Math.max(40, Math.min(g.world.h - 40, p.y + (Math.random() - 0.5) * 1400)),
+            x: Math.max(40, Math.min(g.world.w - 40, p.x + (Math.random() - 0.5) * 700)),
+            y: Math.max(40, Math.min(g.world.h - 40, p.y + (Math.random() - 0.5) * 700)),
           };
         }
         const dr = Math.hypot(a.roamTarget.x - a.x, a.roamTarget.y - a.y);
@@ -1944,6 +1993,26 @@ function update(dt) {
     } else {
       a.angle = p.angle;
     }
+    // sidekick chatter brain: a tiny rule-based AI that reads the fight
+    if (a.type === 'partner') {
+      a.brainT = (a.brainT || 4) - dt;
+      if (a.hp < a.maxHp * 0.3 && g.time > (a.helpAt || 0)) {
+        a.helpAt = g.time + 10;
+        radio(a.name, `${a.name}: "I NEED HELP OVER HERE!"`, '#ef9a9a');
+        sfx.playScream();
+      } else if (a.brainT <= 0) {
+        a.brainT = 9 + Math.random() * 6;
+        const near = g.zombies.filter((zz) => Math.hypot(zz.x - a.x, zz.y - a.y) < 400).length;
+        let line;
+        if (g.superBoss && g.superBoss.hp > 0) line = 'That thing is HUGE. Aim for the glow!';
+        else if (near > 25) line = "They're everywhere — back to back!";
+        else if (p.hp < derived(char).maxHp * 0.3) line = "You're bleeding bad. Find a medkit!";
+        else if (g.player.reserve[p.weapon] !== Infinity && g.player.reserve[p.weapon] < 10) line = 'Running dry? Ammo crates on the map!';
+        else if (g.combo >= 25) line = 'LOOK AT YOU GO!';
+        else line = ['Clear so far.', 'Stay sharp.', 'Nice shooting.', 'I count more coming.'][Math.floor(Math.random() * 4)];
+        radio(a.name, `${a.name}: "${line}"`, a.color);
+      }
+    }
     // medic special: healing aura for the player and nearby squadmates
     if (a.healAura) {
       if (Math.hypot(p.x - a.x, p.y - a.y) < a.healAura) {
@@ -1994,6 +2063,18 @@ function update(dt) {
   // -- explosions animate
   for (const ex of g.explosions) ex.t -= dt;
   g.explosions = g.explosions.filter((ex) => ex.t > 0);
+
+  // -- ground fire burns whatever stands in it
+  g.fires = (g.fires || []).filter((f2) => g.time < f2.until);
+  for (const f2 of g.fires) {
+    for (const z of g.zombies) {
+      if (z.hp <= 0) continue;
+      if (Math.hypot(z.x - f2.x, z.y - f2.y) < f2.r + z.radius) {
+        z.hp -= 35 * dt;
+        if (z.hp <= 0) killZombie(z, Math.atan2(z.y - f2.y, z.x - f2.x));
+      }
+    }
+  }
 
   // -- smoke clouds dissipate, decoy expires
   g.smokes = g.smokes.filter((sm) => g.time < sm.until);
@@ -2185,7 +2266,7 @@ function update(dt) {
     }
     if (b.mortar && b.life <= 0 && !b.boomed) {
       b.boomed = true;
-      explode(b.x, b.y, b.rocket ? 140 : 95, b.rocket ? 300 : 170, false);
+      explode(b.x, b.y, b.rocket ? 175 : 95, b.rocket ? 360 : 170, false);
     }
   }
   g.bullets = g.bullets.filter(
@@ -2434,7 +2515,9 @@ function killZombie(z, dirAngle) {
   const ups = grantXp(char, z.score);
   if (ups > 0) {
     sfx.playLevelUp();
-    banner(`LEVEL ${char.level}`, `+${ups * 3} attribute points — press TAB`, '#64b5f6');
+    g.player.hp = derived(char).maxHp; // LEVEL UP = full restore
+    g.player.armorHP = g.player.armorMax;
+    banner(`LEVEL ${char.level}`, `FULL RESTORE · +${ups * 3} points — press TAB`, '#64b5f6');
   }
 }
 
@@ -2549,7 +2632,8 @@ function drawProps() {
         ctx.textBaseline = 'top';
       }
     } else if (pr.kind === 'wreck' || pr.kind === 'statue' || pr.kind === 'bus' ||
-        pr.kind === 'rubble' || pr.kind === 'dumpster' || pr.kind === 'barricade') {
+        pr.kind === 'rubble' || pr.kind === 'dumpster' || pr.kind === 'barricade' ||
+        pr.kind === 'corpsepile' || pr.kind === 'ambulance' || pr.kind === 'vending') {
       const sp = SPRITES[pr.kind];
       if (sp) {
         ctx.save();
@@ -2854,7 +2938,8 @@ function drawAlly(a) {
   const aWalk = SPRITES[aBase + '_walk'];
   const aMoving = (a.walkPhase || 0) !== (a._lastWP || 0);
   a._lastWP = a.walkPhase || 0;
-  const sprite = (aWalk && aMoving && Math.floor((a.walkPhase || 0) * 1.6) % 2 === 1 ? aWalk : SPRITES[aBase]);
+  // ally stride: walkPhase is distance*0.05, so /1.5 ≈ one frame per 30px
+  const sprite = (aWalk && aMoving && Math.floor((a.walkPhase || 0) / 1.5) % 2 === 1 ? aWalk : SPRITES[aBase]);
   if (sprite) drawSprite(sprite, a.radius * 3.4);
   else {
     ctx.fillStyle = a.color;
@@ -2918,7 +3003,7 @@ function drawPlayer() {
   ctx.save();
   ctx.translate(p.x, p.y);
   // gait: rock around the aim axis + squash-stretch step bounce
-  const rock = Math.sin(p.walkPhase) * 0.07;
+  const rock = Math.sin(p.walkPhase) * 0.035;
   const squish = Math.sin(p.walkPhase * 2) * 0.035;
   ctx.rotate(p.angle + rock);
   ctx.scale(1 + squish, 1 - squish);
@@ -2930,7 +3015,8 @@ function drawPlayer() {
   // 3-state sheet: idle -> [base,walk] cycle -> [walk,run] sprint cycle
   let sprite = SPRITES[spriteName];
   if (spd2 > 40 && walkFrame) {
-    const odd = Math.floor(p.walkPhase * 1.6) % 2 === 1;
+    // one stride per ~30px travelled — correct cadence at every speed
+    const odd = Math.floor((p.animDist || 0) / 30) % 2 === 1;
     if (spd2 > 300 && runFrame) sprite = odd ? runFrame : walkFrame;
     else sprite = odd ? walkFrame : SPRITES[spriteName];
   }
@@ -2946,10 +3032,17 @@ function drawPlayer() {
     ctx.fillRect(p.radius - 4, -3, 18, 6);
   }
   if (p.muzzleFlash > 0) {
-    ctx.fillStyle = '#ffe082';
-    ctx.beginPath();
-    ctx.arc(p.radius + 18, 0, 7, 0, Math.PI * 2);
-    ctx.fill();
+    if (SPRITES.muzzle) {
+      ctx.save();
+      ctx.translate(p.radius + 24, 0);
+      drawSpriteFit(SPRITES.muzzle, 34, 24);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#ffe082';
+      ctx.beginPath();
+      ctx.arc(p.radius + 18, 0, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.restore();
 }
@@ -3058,31 +3151,39 @@ function glass(x, y, w, h, accent = '#37474f') {
 }
 
 function drawBanners(dt) {
-  for (const b of banners) {
-    b.t -= dt;
-    const t = b.t;
-    if (t <= 0) continue;
-    const scale = t > 2.1 ? 1 + (t - 2.1) * 8 : 1;
-    const alpha = Math.min(1, t);
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.translate(view.w / 2, view.h / 2 - 80);
-    ctx.scale(scale, scale);
-    ctx.globalAlpha = alpha;
-    ctx.font = 'bold 58px monospace';
-    ctx.fillStyle = b.color;
-    ctx.shadowColor = b.color;
-    ctx.shadowBlur = 30;
-    ctx.fillText(b.text, 0, 0);
-    if (b.sub) {
-      ctx.shadowBlur = 0;
-      ctx.font = '18px monospace';
-      ctx.fillStyle = '#e0e0e0';
-      ctx.fillText(b.sub, 0, 36);
-    }
-    ctx.restore();
+  // ONE banner at a time — the rest queue behind it, no overlap
+  const b = banners[0];
+  if (!b) return;
+  b.t -= dt;
+  if (b.t <= 0) {
+    banners.shift();
+    return;
   }
-  banners = banners.filter((b) => b.t > 0);
+  const t = b.t;
+  const scale = t > 1.7 ? 1 + (t - 1.7) * 8 : 1;
+  const alpha = Math.min(1, t * 1.4);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.translate(view.w / 2, view.h / 2 - 80);
+  ctx.scale(scale, scale);
+  ctx.globalAlpha = alpha;
+  ctx.font = 'bold 58px monospace';
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+  ctx.strokeText(b.text, 0, 0);
+  ctx.fillStyle = b.color;
+  ctx.shadowColor = b.color;
+  ctx.shadowBlur = 30;
+  ctx.fillText(b.text, 0, 0);
+  if (b.sub) {
+    ctx.shadowBlur = 0;
+    ctx.font = '18px monospace';
+    ctx.lineWidth = 5;
+    ctx.strokeText(b.sub, 0, 36);
+    ctx.fillStyle = '#e0e0e0';
+    ctx.fillText(b.sub, 0, 36);
+  }
+  ctx.restore();
 }
 
 function drawScreenBlood() {
@@ -4273,6 +4374,23 @@ function render(dt) {
     }
     ctx.restore();
   }
+  // burning ground
+  for (const f2 of game.fires || []) {
+    const flick = 1 + Math.sin(performance.now() / 70 + f2.x) * 0.12;
+    if (SPRITES.fire) {
+      ctx.save();
+      ctx.translate(f2.x, f2.y);
+      ctx.globalAlpha = Math.min(1, (f2.until - game.time) / 0.6);
+      drawSpriteFit(SPRITES.fire, f2.r * 2.4 * flick, f2.r * 2.4 * flick);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = `rgba(255,140,0,${0.25 * flick})`;
+      ctx.beginPath();
+      ctx.arc(f2.x, f2.y, f2.r * flick, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   // smoke clouds
   for (const sm of game.smokes) {
     const left = Math.min(1, (sm.until - game.time) / 1.5);
@@ -4410,6 +4528,11 @@ function render(dt) {
     ctx.save();
     ctx.translate(gb.x, gb.y);
     ctx.rotate(gb.rot);
+    if (gb.sprite && SPRITES[gb.sprite]) {
+      drawSpriteFit(SPRITES[gb.sprite], gb.size * 3, gb.size * 3);
+      ctx.restore();
+      continue;
+    }
     ctx.fillStyle = gb.color;
     if (gb.head) {
       // a popped head tumbling away, trailing blood

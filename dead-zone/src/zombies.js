@@ -133,7 +133,7 @@ export function spawnZombie(type, w, h) {
 const MIX = [
   ['walker', 38, 0], ['runner', 18, 0], ['crawler', 10, 0], ['dog', 8, 1],
   ['stalker', 6, 2], ['brute', 5, 1], ['spitter', 4, 2], ['cop', 4, 3],
-  ['granny', 3, 2], ['hazmat', 2, 4], ['butcher', 2, 4], ['exploder', 3, 3],
+  ['granny', 8, 1], ['hazmat', 2, 4], ['butcher', 2, 4], ['exploder', 3, 3],
   ['screamer', 1, 3],
 ];
 
