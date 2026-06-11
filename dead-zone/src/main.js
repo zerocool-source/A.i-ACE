@@ -138,6 +138,12 @@ let briefingStart = 0; // typewriter clock for the level-intro story text
 let screenBlood = []; // splatter stuck to the camera: {fx, fy, r, alpha}
 let gpFocus = 0; // gamepad focus index into uiButtons
 let cam = { x: 0, y: 0 };
+let shake = 0; // screen-shake magnitude, decays fast
+let hitStopT = 0; // micro freeze-frames on big kills
+
+function addShake(n) {
+  shake = Math.min(24, shake + n);
+}
 
 function enterLevelIntro() {
   state = 'levelintro';
@@ -575,6 +581,7 @@ function newGame() {
     streakFired: {},
     nadeSel: 'frag',
     killT: 0,
+    killMarks: [],
     superBoss: null,
     survivalT: null, // wave-3 countdown
     survivalPool: 0, // how many of the 5,000 are still unspawned
@@ -912,6 +919,7 @@ function addScreenBlood(intensity = 1) {
 function explode(x, y, radius, damage, hurtsPlayer) {
   const g = game;
   g.explosions.push({ x, y, r: radius, t: 0.45 });
+  addShake(Math.min(10, radius * 0.07));
   sfx.playHiggsWhomp();
   spawnBlood(x, y, 30, '#7b1d1d');
   spawnGibs(x, y, 14);
@@ -960,6 +968,7 @@ function damagePlayer(dmg) {
   if (dmg <= 0) return;
   p.hp -= dmg;
   p.hurtFlash = 0.25;
+  addShake(5);
   g.streak = 0; // a hit to HEALTH resets the killstreak
   addScreenBlood(1);
   spawnBlood(p.x, p.y, 8, '#c62828');
@@ -1236,6 +1245,15 @@ function update(dt) {
       p.fireCooldown = ws.fireInterval;
       p.muzzleFlash = 0.05;
       sfx.playGunshot(p.weapon);
+      // recoil + kick: heavy guns shove you and rattle the camera
+      const heavy = ['shotgun', 'magnum', 'flak', 'railgun', 'sniper', 'mortar', 'glauncher'].includes(p.weapon);
+      if (heavy) {
+        p.vx -= Math.cos(p.angle) * 130;
+        p.vy -= Math.sin(p.angle) * 130;
+        addShake(3);
+      } else {
+        addShake(0.5);
+      }
       // eject a shell casing perpendicular to the barrel
       const ca = p.angle + Math.PI / 2 + (Math.random() - 0.5) * 0.6;
       g.casings.push({
@@ -2026,6 +2044,10 @@ function update(dt) {
         z.hp -= dmg;
         z.flash = 0.08;
         b.hit.add(z);
+        if (g.time - (g.lastTick || 0) > 0.05) {
+          g.lastTick = g.time;
+          sfx.playHitTick();
+        }
         if (b.hit.size >= b.pierce) b.life = 0;
         spawnBlood(b.x, b.y, 6, '#7b1d1d', dir);
         if (!b.friendly) {
@@ -2118,6 +2140,8 @@ function update(dt) {
     n.life -= dt;
   }
   g.dmgNumbers = g.dmgNumbers.filter((n) => n.life > 0);
+  for (const km of g.killMarks) km.t -= dt;
+  g.killMarks = g.killMarks.filter((km) => km.t > 0);
   for (const sb of screenBlood) sb.alpha -= dt * 0.12;
   screenBlood = screenBlood.filter((sb) => sb.alpha > 0.02);
   for (const rl of radioLines) rl.t -= dt;
@@ -2164,6 +2188,15 @@ function killZombie(z, dirAngle) {
     banner('SUPER BOSS DOWN', z.super, '#ffd700');
     addScreenBlood(2);
   }
+  // SYNTHETIK-style kill feedback
+  sfx.playKillThud();
+  addShake(1.1);
+  const bigKill = z.radius > 19 || z.super;
+  g.killMarks.push({ x: z.x, y: z.y, t: 0.4, big: bigKill });
+  if (bigKill) {
+    hitStopT = Math.max(hitStopT, 0.06);
+    addShake(4);
+  }
   // killstreaks: build kills without your HEALTH being hit
   g.streak++;
   if (g.streak >= 25 && !g.streakFired[25]) {
@@ -2204,6 +2237,8 @@ function killZombie(z, dirAngle) {
   // 22% of kills pop the head clean off
   if (Math.random() < 0.22) {
     g.score += 5;
+    hitStopT = Math.max(hitStopT, 0.05);
+    addShake(3);
     g.dmgNumbers.push({ x: z.x, y: z.y - z.radius - 10, txt: 'HEADSHOT', color: '#ff5252', life: 1.1, vy: -55 });
     const ha = (dirAngle ?? 0) + (Math.random() - 0.5) * 0.8;
     g.gibs.push({
@@ -2378,6 +2413,34 @@ function drawProps() {
             ctx.fillStyle = lit ? '#5d4a1e' : '#222a35';
             ctx.fillRect(wx, wy, 12, 12);
           }
+        }
+        // rooftop furniture: AC units + an antenna, varied per building
+        if (pr.seed > 0.35) {
+          const ax = pr.x + 10 + (pr.seed * 97 % 1) * (pr.w - 48);
+          const ay = pr.y + 10 + (pr.seed * 53 % 1) * (pr.h - 40);
+          ctx.fillStyle = '#454f5a';
+          ctx.fillRect(ax, ay, 30, 22);
+          ctx.strokeStyle = '#5d6873';
+          ctx.strokeRect(ax + 3, ay + 3, 24, 16);
+          ctx.beginPath();
+          ctx.arc(ax + 15, ay + 11, 7, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        if (pr.seed > 0.6) {
+          const tx = pr.x + pr.w - 26;
+          const ty = pr.y + 18;
+          ctx.strokeStyle = '#6b7782';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(tx, ty + 16);
+          ctx.lineTo(tx, ty);
+          ctx.moveTo(tx - 7, ty + 6);
+          ctx.lineTo(tx + 7, ty + 6);
+          ctx.stroke();
+          ctx.fillStyle = '#ef5350';
+          ctx.beginPath();
+          ctx.arc(tx, ty, 2.5, 0, Math.PI * 2);
+          ctx.fill();
         }
       } else if (pr.kind === 'crypt') {
         ctx.fillStyle = '#3e463e';
@@ -2797,6 +2860,25 @@ function drawScraps() {
 
 // ---- render: HUD + screens -------------------------------------------------------
 
+// rounded glass panel — the UI overhaul backbone
+function glass(x, y, w, h, accent = '#37474f') {
+  ctx.save();
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, 8);
+  else ctx.rect(x, y, w, h);
+  ctx.fillStyle = 'rgba(8,12,16,0.72)';
+  ctx.fill();
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.beginPath();
+  ctx.moveTo(x + 8, y + 2);
+  ctx.lineTo(x + w - 8, y + 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawBanners(dt) {
   for (const b of banners) {
     b.t -= dt;
@@ -2862,10 +2944,9 @@ function drawMinimap() {
   const mw = 170, mh = Math.round(170 * (g.world.h / g.world.w));
   const mx = view.w - mw - 20, my = 40;
   ctx.save();
+  glass(mx - 4, my - 4, mw + 8, mh + 8, 'rgba(120,150,170,0.4)');
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(mx, my, mw, mh);
-  ctx.strokeStyle = '#37474f';
-  ctx.strokeRect(mx, my, mw, mh);
   const sx = mw / g.world.w, sy = mh / g.world.h;
   const dot = (x, y, color, r = 2) => {
     ctx.fillStyle = color;
@@ -2894,6 +2975,7 @@ function drawHUD() {
   ctx.font = '14px monospace';
   ctx.textBaseline = 'top';
 
+  glass(12, 12, 240, 116, 'rgba(120,150,170,0.45)');
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(20, 20, 220, 18);
   ctx.fillStyle = p.hp > d.maxHp * 0.3 ? '#66bb6a' : '#ef5350';
@@ -2941,6 +3023,7 @@ function drawHUD() {
   ctx.textAlign = 'right';
   ctx.fillText(`⚙ ${char.scrap}`, view.w - 24, 22);
 
+  glass(view.w - 360, view.h - 84, 336, 60, 'rgba(255,213,121,0.35)');
   ctx.font = 'bold 22px monospace';
   ctx.fillStyle = '#fff';
   const res = p.reserve[p.weapon];
@@ -2984,6 +3067,7 @@ function drawHUD() {
   }
 
   ctx.textAlign = 'center';
+  glass(view.w / 2 - 250, 10, 500, 48, gameMode !== 'campaign' ? 'rgba(255,23,68,0.5)' : 'rgba(229,57,53,0.35)');
   ctx.font = 'bold 18px monospace';
   ctx.fillStyle = gameMode !== 'campaign' ? '#ff1744' : '#ef9a9a';
   const topLine =
@@ -3880,8 +3964,11 @@ function render(dt) {
   }
 
   updateCamera(dt);
+  shake *= Math.exp(-7 * (dt || 0.016));
+  const jx = (Math.random() - 0.5) * shake;
+  const jy = (Math.random() - 0.5) * shake;
   ctx.save();
-  ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
+  ctx.translate(-Math.round(cam.x + jx), -Math.round(cam.y + jy));
   drawGround();
   for (const co of game.corpses) {
     if (co.x < cam.x - 80 || co.x > cam.x + view.w + 80 || co.y < cam.y - 80 || co.y > cam.y + view.h + 80) continue;
@@ -4091,10 +4178,28 @@ function render(dt) {
     ctx.fillRect(pa.x - pa.size / 2, pa.y - pa.size / 2, pa.size, pa.size);
   }
   ctx.globalAlpha = 1;
+  // red kill X's, SYNTHETIK style
+  for (const km of game.killMarks) {
+    const t = km.t / 0.4;
+    const r = (km.big ? 26 : 13) * (1.6 - t * 0.6);
+    ctx.strokeStyle = `rgba(244,67,54,${t})`;
+    ctx.lineWidth = km.big ? 6 : 3.5;
+    ctx.beginPath();
+    ctx.moveTo(km.x - r, km.y - r);
+    ctx.lineTo(km.x + r, km.y + r);
+    ctx.moveTo(km.x + r, km.y - r);
+    ctx.lineTo(km.x - r, km.y + r);
+    ctx.stroke();
+  }
   for (const n of game.dmgNumbers) {
+    const crit = n.color === '#ffd740';
+    const pop = 1 + Math.max(0, n.life - (crit ? 0.7 : 0.5)) * 2.2; // punchy scale-in
     ctx.globalAlpha = Math.min(1, n.life * 2.5);
-    ctx.font = n.color === '#ffd740' ? 'bold 18px monospace' : 'bold 14px monospace';
+    ctx.font = `bold ${Math.round((crit ? 26 : 16) * pop)}px monospace`;
     ctx.textAlign = 'center';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(n.txt, n.x, n.y);
     ctx.fillStyle = n.color;
     ctx.fillText(n.txt, n.x, n.y);
   }
@@ -4208,7 +4313,10 @@ function frameInner(now) {
     }
   } else if (state === 'playing') {
     if (wasPressed('tab') || gpPressed('start')) charSheetOpen = !charSheetOpen;
-    if (!charSheetOpen) update(dt); // char sheet pauses the game
+    if (!charSheetOpen) {
+      if (hitStopT > 0) hitStopT -= dt; // freeze-frame: render, don't simulate
+      else update(dt);
+    }
   } else if (state === 'shop') {
     if (wasPressed('tab') || gpPressed('start')) charSheetOpen = !charSheetOpen;
   } else if (state === 'victory') {

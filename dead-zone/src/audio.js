@@ -325,6 +325,34 @@ export function playScream() {
   vib.stop(t + 0.6);
 }
 
+export function playHitTick() {
+  const c = ac();
+  const t = c.currentTime;
+  const osc = c.createOscillator();
+  osc.type = 'square';
+  osc.frequency.value = 1900;
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.05, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+  osc.connect(g).connect(master);
+  osc.start(t);
+  osc.stop(t + 0.035);
+}
+
+export function playKillThud() {
+  const c = ac();
+  const t = c.currentTime;
+  const osc = c.createOscillator();
+  osc.frequency.setValueAtTime(110, t);
+  osc.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.4, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+  osc.connect(g).connect(master);
+  osc.start(t);
+  osc.stop(t + 0.18);
+}
+
 export function playGameOverSting() {
   const c = ac();
   const t = c.currentTime;
