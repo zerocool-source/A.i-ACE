@@ -128,17 +128,20 @@ export function spawnZombie(type, w, h) {
   };
 }
 
-// weighted random picks for big mixed drops
+// weighted random picks for big mixed drops. minTier gates the nasty types
+// so early levels stay survivable: tier = campaign level index.
 const MIX = [
-  ['walker', 38], ['runner', 18], ['crawler', 10], ['dog', 8], ['stalker', 6],
-  ['brute', 5], ['spitter', 4], ['cop', 4], ['granny', 3], ['hazmat', 2],
-  ['butcher', 2], ['exploder', 3], ['screamer', 1],
+  ['walker', 38, 0], ['runner', 18, 0], ['crawler', 10, 0], ['dog', 8, 1],
+  ['stalker', 6, 2], ['brute', 5, 1], ['spitter', 4, 2], ['cop', 4, 3],
+  ['granny', 3, 2], ['hazmat', 2, 4], ['butcher', 2, 4], ['exploder', 3, 3],
+  ['screamer', 1, 3],
 ];
-const MIX_TOTAL = MIX.reduce((s, [, w]) => s + w, 0);
 
-export function randomZombieType() {
-  let r = Math.random() * MIX_TOTAL;
-  for (const [t, w] of MIX) {
+export function randomZombieType(tier = 99) {
+  const pool = MIX.filter(([, , minTier]) => tier >= minTier);
+  const total = pool.reduce((s, [, w]) => s + w, 0);
+  let r = Math.random() * total;
+  for (const [t, w] of pool) {
     r -= w;
     if (r <= 0) return t;
   }

@@ -86,7 +86,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'hero_engineer', 'hero_veteran', 'hero_athlete',
                     'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder',
                     'crawler', 'screamer', 'rogue', 'cache', 'wreck', 'statue',
-                    'granny', 'cop', 'hazmat', 'butcher', 'dog', 'stalker']) {
+                    'granny', 'cop', 'hazmat', 'butcher', 'dog', 'stalker',
+                    'drive_sports', 'drive_taxi', 'drive_police']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -484,6 +485,20 @@ function squadBanter() {
   radio(who.name, who.echo ? line : `${who.name}: "${line}"`, who.color);
 }
 
+// mid-game story drip: a line at each wave start, keyed by level
+const LEVEL_RADIO = {
+  city: ['ECHO-6: "Your block went dark last Tuesday. You\'re the first signal since."', 'ECHO-6: "There\'s a kid\'s bike on every lawn down there. Don\'t look too long."'],
+  graveyard: ['ECHO-6: "Old Harrow\'s caretaker buried 300 in a week. Then he buried himself."', 'ECHO-6: "The chapel bell rings sometimes. Nobody\'s in the tower."'],
+  sewer: ['ECHO-6: "Maintenance crew 9 went down there day two. Their radios still click."', 'ECHO-6: "The runners learned the tunnels faster than we mapped them."'],
+  hospital: ['ECHO-6: "Patient zero\'s chart just says \'bite, canine?\'. It wasn\'t canine."', 'ECHO-6: "The ICU generators are still running. Someone keeps fueling them."'],
+  base: ['ECHO-6: "Delta\'s last order was \'hold\'. They held for nine days."', 'ECHO-6: "I\'m in the comms tower. If this goes wrong... it was good working with you."'],
+  mall: ['ECHO-6: "Mall security broadcast loops every hour. It\'s started adding words."', 'ECHO-6: "Food court\'s a nest. The fountain... don\'t drink the fountain."'],
+  subway: ['ECHO-6: "The 3:14 to Riverside never made its stop. It\'s still moving somewhere."', 'ECHO-6: "They go quiet when a train horn echoes. All of them. At once."'],
+  prison: ['ECHO-6: "Blackgate\'s warden filed one last report: \'they remember their cells\'."', 'ECHO-6: "Solitary wing is welded shut from the INSIDE."'],
+  docks: ['ECHO-6: "The VERA\'s manifest listed machine parts. The crates were breathing."', 'ECHO-6: "Coast guard scuttled three ships at the mouth. It wasn\'t enough."'],
+  rooftops: ['ECHO-6: "Survivors on the north tower spotted the nest. Then it spotted them."', 'ECHO-6: "After this... I\'m coming down from this tower. Save me a rooftop."'],
+};
+
 const ALLY_DEFS = {
   soldier: { name: 'SGT. REYES', hp: 160, damage: 26, fireInterval: 0.22, range: 620, color: '#81c784', mag: 30, reloadTime: 2.2 },
   medic: { name: 'DOC OKAFOR', hp: 140, damage: 18, fireInterval: 0.5, range: 420, color: '#f8bbd0', healAura: 220, healRate: 4, mag: 12, reloadTime: 1.8 },
@@ -549,6 +564,8 @@ function newGame() {
     frenzyUntil: 0,
     throwables: [],
     strikes: [],
+    driveCars: [],
+    driveTimer: 8 + Math.random() * 10,
     smokes: [],
     decoy: null,
     streak: 0,
@@ -737,7 +754,7 @@ function nextWave() {
   }
   const count = g.wave === 1 ? 100 : 300;
   const comp = [];
-  for (let i = 0; i < Math.round(count * lv.countMult); i++) comp.push(randomZombieType());
+  for (let i = 0; i < Math.round(count * lv.countMult); i++) comp.push(randomZombieType(char.campaignLevel));
   // feral military units stalk the later levels
   if (char.campaignLevel >= 2 && g.wave >= 2) {
     for (let i = 0; i < 4 + char.campaignLevel; i++) comp.push('rogue');
@@ -749,10 +766,12 @@ function nextWave() {
   }
   banner(`WAVE ${g.wave}`, `${count * lv.countMult | 0} INBOUND — ${lv.name}`);
   if (g.wave > 1) squadBanter();
+  const lore = LEVEL_RADIO[lv.key];
+  if (lore) radio('echo', lore[(g.wave - 1) % lore.length], '#80cbc4');
   g.spawnQueue = comp;
   g.spawnTimer = 0;
   // a random HORDE EVENT can hit any wave: 8x-speed sprinters, all at once
-  g.hordeEventAt = Math.random() < 0.35 ? g.time + 10 + Math.random() * 20 : -1;
+  g.hordeEventAt = char.campaignLevel >= 1 && Math.random() < 0.35 ? g.time + 12 + Math.random() * 20 : -1;
   // dump an opening surge so the wave hits immediately
   const surge = Math.min(30, 15 + g.wave * 5);
   for (let i = 0; i < surge && g.spawnQueue.length; i++) {
@@ -951,8 +970,10 @@ function applyPickup(type) {
     }
     g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+AMMO RESERVES', color: '#ffe082', life: 1, vy: -50 });
   } else if (type === 'nade') {
-    char.grenades = (char.grenades || 0) + 2;
-    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+2 GRENADES [G]', color: '#aed581', life: 1, vy: -50 });
+    const kinds = ['frag', 'frag', 'smoke', 'decoy'];
+    const k = kinds[Math.floor(Math.random() * kinds.length)];
+    char.nades[k] = (char.nades[k] || 0) + 2;
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: `+2 ${k.toUpperCase()} [G]`, color: '#aed581', life: 1, vy: -50 });
   } else if (type === 'dyna') {
     char.dynamite = (char.dynamite || 0) + 1;
     g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+1 DYNAMITE [H]', color: '#ff8a65', life: 1, vy: -50 });
@@ -1318,7 +1339,7 @@ function update(dt) {
     g.survivalT -= dt;
     let burst = 0;
     while (g.survivalPool > 0 && g.zombies.length < 320 && burst < 8) {
-      g.zombies.push(spawnLevelZombie(randomZombieType()));
+      g.zombies.push(spawnLevelZombie(randomZombieType(char.campaignLevel)));
       g.survivalPool--;
       burst++;
     }
@@ -1332,6 +1353,8 @@ function update(dt) {
       g.survivalT = null;
       banner('YOU SURVIVED THE 5,000', 'but something bigger is coming…', '#ffd54f');
       sfx.playFanfare();
+      p.hp = derived(char).maxHp; // full restore before the boss
+      p.armorHP = p.armorMax;
       // …and now the SUPER BOSS, with its goon army
       const sb = SUPERBOSSES[char.campaignLevel % SUPERBOSSES.length]; // unique boss per level
       const bz = spawnLevelZombie('boss');
@@ -1373,11 +1396,11 @@ function update(dt) {
   }
 
   // -- FRENZY: every 23 seconds the entire horde surges at 3x speed
-  if (g.zombies.length && gameMode === 'campaign') {
+  if (g.zombies.length && gameMode === 'campaign' && (g.wave > 1 || char.campaignLevel > 0)) {
     g.frenzyTimer -= dt;
     if (g.frenzyTimer <= 0) {
       g.frenzyTimer = 23;
-      g.frenzyUntil = g.time + 4;
+      g.frenzyUntil = g.time + (char.campaignLevel === 0 ? 2.5 : 4);
       banner('FRENZY', 'THE HORDE SURGES — RUN', '#ff1744');
       sfx.playScream();
       sfx.playHiggsWhomp();
@@ -1633,10 +1656,21 @@ function update(dt) {
           a.walkPhase = (a.walkPhase || 0) + 170 * dt * 0.05;
         }
       }
-    } else if (dp > 170) {
-      a.x += ((p.x - a.x) / dp) * 200 * dt;
-      a.y += ((p.y - a.y) / dp) * 200 * dt;
-      a.walkPhase = (a.walkPhase || 0) + 200 * dt * 0.05;
+    } else {
+      // each squadmate holds a slot on a slowly-rotating ring around you —
+      // spread out, covering different directions
+      const living = g.allies.filter((x) => !x.down && x.type !== 'partner');
+      const slot = living.indexOf(a);
+      const ringA = (slot / Math.max(1, living.length)) * Math.PI * 2 + g.time * 0.15;
+      const tx = p.x + Math.cos(ringA) * 150;
+      const ty = p.y + Math.sin(ringA) * 150;
+      const dd = Math.hypot(tx - a.x, ty - a.y);
+      if (dd > 26) {
+        const spd2 = dd > 320 ? 230 : 150;
+        a.x += ((tx - a.x) / dd) * spd2 * dt;
+        a.y += ((ty - a.y) / dd) * spd2 * dt;
+        a.walkPhase = (a.walkPhase || 0) + spd2 * dt * 0.05;
+      }
     }
     collideProps(a);
     let nz = null, nd = 1e9;
@@ -1728,6 +1762,36 @@ function update(dt) {
   // -- smoke clouds dissipate, decoy expires
   g.smokes = g.smokes.filter((sm) => g.time < sm.until);
   if (g.decoy && g.time >= g.decoy.until) g.decoy = null;
+
+  // -- ambient drive-bys: survivors flooring it down the road, plowing the horde
+  if ((lv.key === 'city' || lv.key === 'base' || lv.key === 'docks') && gameMode === 'campaign') {
+    g.driveTimer -= dt;
+    if (g.driveTimer <= 0) {
+      g.driveTimer = 14 + Math.random() * 16;
+      const ltr = Math.random() < 0.5;
+      g.driveCars.push({
+        x: ltr ? -120 : g.world.w + 120,
+        y: g.world.h / 2 + (Math.random() - 0.5) * 60,
+        vx: (ltr ? 1 : -1) * (820 + Math.random() * 250),
+        sprite: ['drive_sports', 'drive_taxi', 'drive_police'][Math.floor(Math.random() * 3)],
+      });
+    }
+  }
+  for (const car of g.driveCars) {
+    car.x += car.vx * dt;
+    for (const z of g.zombies) {
+      if (z.hp <= 0) continue;
+      if (Math.abs(z.y - car.y) < 26 && Math.abs(z.x - car.x) < 50) {
+        z.hp = 0;
+        killZombie(z, Math.atan2(0, Math.sign(car.vx)));
+      }
+    }
+    if (Math.abs(p.y - car.y) < 24 && Math.abs(p.x - car.x) < 48) {
+      damagePlayer(20);
+      p.vx += Math.sign(car.vx) * 600;
+    }
+  }
+  g.driveCars = g.driveCars.filter((c2) => c2.x > -200 && c2.x < g.world.w + 200);
 
   // -- queued air support detonates
   for (const st of g.strikes) {
@@ -2878,6 +2942,15 @@ function drawCharSheet() {
     `DMG x${d.damageMult.toFixed(2)}  SPD x${d.moveMult.toFixed(2)}  HP ${d.maxHp}  REGEN ${d.regen.toFixed(1)}/s  CRIT ${(d.critChance * 100).toFixed(0)}%  HIGGS ${d.higgsCooldown.toFixed(1)}s  ARMOR ${d.armor}`,
     x + 24, yy + 6
   );
+  // special skills readout
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = '#ffd54f';
+  ctx.fillText('SPECIAL SKILLS', x + 24, yy + 28);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#cfd8dc';
+  const shieldsTxt = char.shields.map((sh) => sh.toUpperCase()).join(' / ');
+  ctx.fillText(`SHIELD CORES: ${shieldsTxt} (active: ${char.shieldType.toUpperCase()}) · DASH [SPACE] · KILLSTREAKS 25/50/75`, x + 24, yy + 46);
+  ctx.fillText(`THROWABLES: FRAG ×${char.nades.frag} · SMOKE ×${char.nades.smoke} · DECOY ×${char.nades.decoy} · DYNAMITE ×${char.dynamite}`, x + 24, yy + 62);
   ctx.fillStyle = '#9e9e9e';
   ctx.fillText('[TAB/Ⓑ] close', x + 24, y + h - 28);
 }
@@ -3703,6 +3776,35 @@ function render(dt) {
     } else {
       ctx.fillStyle = blink ? '#fff' : '#d84315';
       ctx.fillRect(-6, -4, 12, 8);
+    }
+    ctx.restore();
+  }
+  for (const car of game.driveCars) {
+    ctx.save();
+    ctx.translate(car.x, car.y);
+    if (car.vx < 0) ctx.scale(-1, 1);
+    const sp = SPRITES[car.sprite];
+    if (sp) drawSpriteFit(sp, 96, 48);
+    else {
+      ctx.fillStyle = '#b71c1c';
+      ctx.fillRect(-44, -18, 88, 36);
+      ctx.fillStyle = '#11151a';
+      ctx.fillRect(-12, -14, 26, 28);
+    }
+    // headlights + motion streaks
+    ctx.fillStyle = 'rgba(255,236,150,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(44, -10);
+    ctx.lineTo(150, -26);
+    ctx.lineTo(150, 26);
+    ctx.lineTo(44, 10);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-50, -10 + i * 10);
+      ctx.lineTo(-110, -10 + i * 10);
+      ctx.stroke();
     }
     ctx.restore();
   }

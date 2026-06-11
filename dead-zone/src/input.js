@@ -11,7 +11,7 @@ export function initInput(canvas) {
     const k = e.key.toLowerCase();
     if (!input.keys.has(k)) input.pressed.add(k);
     input.keys.add(k);
-    if (['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'r', 'e', 'f', 'g', 'h', 'q', 't', 'c', ' ', 'tab'].includes(k)) e.preventDefault();
+    if (['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'r', 'e', 'f', 'g', 'h', 'q', 't', 'c', 'p', ' ', 'tab'].includes(k)) e.preventDefault();
   });
   window.addEventListener('keyup', (e) => input.keys.delete(e.key.toLowerCase()));
   canvas.addEventListener('mousemove', (e) => {
