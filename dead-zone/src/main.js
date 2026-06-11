@@ -582,6 +582,11 @@ function newGame() {
     nadeSel: 'frag',
     killT: 0,
     killMarks: [],
+    combo: 0,
+    comboT: 0,
+    comboBest: 0,
+    shots: 0,
+    hits: 0,
     superBoss: null,
     survivalT: null, // wave-3 countdown
     survivalPool: 0, // how many of the 5,000 are still unspawned
@@ -920,6 +925,15 @@ function explode(x, y, radius, damage, hurtsPlayer) {
   const g = game;
   g.explosions.push({ x, y, r: radius, t: 0.45 });
   addShake(Math.min(10, radius * 0.07));
+  for (let sp3 = 0; sp3 < 8; sp3++) {
+    const a3 = Math.random() * Math.PI * 2;
+    g.particles.push({
+      x, y,
+      vx: Math.cos(a3) * (220 + Math.random() * 260),
+      vy: Math.sin(a3) * (220 + Math.random() * 260),
+      life: 0.15 + Math.random() * 0.15, color: sp3 % 2 ? '#fff' : '#ffe082', size: 3,
+    });
+  }
   sfx.playHiggsWhomp();
   spawnBlood(x, y, 30, '#7b1d1d');
   spawnGibs(x, y, 14);
@@ -1245,6 +1259,7 @@ function update(dt) {
       p.fireCooldown = ws.fireInterval;
       p.muzzleFlash = 0.05;
       sfx.playGunshot(p.weapon);
+      g.shots += ws.pellets;
       // recoil + kick: heavy guns shove you and rattle the camera
       const heavy = ['shotgun', 'magnum', 'flak', 'railgun', 'sniper', 'mortar', 'glauncher'].includes(p.weapon);
       if (heavy) {
@@ -2044,6 +2059,17 @@ function update(dt) {
         z.hp -= dmg;
         z.flash = 0.08;
         b.hit.add(z);
+        if (!b.friendly) g.hits++;
+        // white impact sparks, SYNTHETIK flash
+        for (let sp2 = 0; sp2 < 3; sp2++) {
+          const sa2 = dir + Math.PI + (Math.random() - 0.5) * 1.4;
+          g.particles.push({
+            x: b.x, y: b.y,
+            vx: Math.cos(sa2) * (140 + Math.random() * 160),
+            vy: Math.sin(sa2) * (140 + Math.random() * 160),
+            life: 0.12 + Math.random() * 0.1, color: '#fff', size: 2.5,
+          });
+        }
         if (g.time - (g.lastTick || 0) > 0.05) {
           g.lastTick = g.time;
           sfx.playHitTick();
@@ -2142,6 +2168,17 @@ function update(dt) {
   g.dmgNumbers = g.dmgNumbers.filter((n) => n.life > 0);
   for (const km of g.killMarks) km.t -= dt;
   g.killMarks = g.killMarks.filter((km) => km.t > 0);
+  if (g.combo > 0) {
+    g.comboT -= dt;
+    if (g.comboT <= 0) {
+      if (g.combo >= 10) {
+        const bonus = g.combo * 2;
+        char.scrap += bonus;
+        g.dmgNumbers.push({ x: p.x, y: p.y - 30, txt: `COMBO ×${g.combo} BANKED +⚙${bonus}`, color: '#ffd740', life: 1.3, vy: -40 });
+      }
+      g.combo = 0;
+    }
+  }
   for (const sb of screenBlood) sb.alpha -= dt * 0.12;
   screenBlood = screenBlood.filter((sb) => sb.alpha > 0.02);
   for (const rl of radioLines) rl.t -= dt;
@@ -2183,6 +2220,18 @@ function killZombie(z, dirAngle) {
   const g = game;
   if (z._dead) return;
   z._dead = true;
+  // COMBO: chain kills inside 2.2s for multiplied score + scrap
+  g.combo++;
+  g.comboT = 2.2;
+  g.comboBest = Math.max(g.comboBest, g.combo);
+  const mult = Math.min(5, 1 + g.combo * 0.1);
+  const gained = Math.round(z.score * mult);
+  g.score += gained - z.score; // base z.score added below as before
+  g.dmgNumbers.push({
+    x: z.x, y: z.y - z.radius - 4,
+    txt: `+${gained}`, color: '#ffd740',
+    life: g.combo >= 8 ? 1.1 : 0.8, vy: -70,
+  });
   if (z.super) {
     g.superBoss = null;
     banner('SUPER BOSS DOWN', z.super, '#ffd700');
@@ -3093,6 +3142,20 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
   ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, view.w / 2, 46);
+  // combo meter
+  if (game.combo >= 3) {
+    const pulse2 = 1 + Math.min(0.3, game.combo * 0.01) * Math.sin(performance.now() / 90);
+    ctx.font = `bold ${Math.round(24 * pulse2)}px monospace`;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(`COMBO ×${game.combo}`, view.w / 2, 64);
+    ctx.fillStyle = '#ffd740';
+    ctx.fillText(`COMBO ×${game.combo}`, view.w / 2, 64);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(view.w / 2 - 60, 94, 120, 5);
+    ctx.fillStyle = '#ffd740';
+    ctx.fillRect(view.w / 2 - 60, 94, 120 * Math.max(0, game.comboT / 2.2), 5);
+  }
   // survival countdown
   if (game.survivalT != null) {
     const m = Math.floor(Math.max(0, game.survivalT) / 60);
@@ -3877,7 +3940,11 @@ function drawGameOver() {
   ctx.shadowBlur = 0;
   ctx.font = '20px monospace';
   ctx.fillStyle = '#fff';
+  const acc = game.shots > 0 ? Math.round((game.hits / game.shots) * 100) : 0;
   ctx.fillText(`${level().name} — wave ${game.wave} · Score ${game.score}`, cx, cy - 4);
+  ctx.font = '15px monospace';
+  ctx.fillStyle = '#ffd740';
+  ctx.fillText(`${game.kills} kills · ${acc}% accuracy · best combo ×${game.comboBest}`, cx, cy + 52);
   ctx.font = '15px monospace';
   ctx.fillStyle = overDied ? '#ef9a9a' : '#ffd54f';
   ctx.fillText(overDied ? 'Half your scrap was lost. Your level and gear survive.' : 'Scrap bonus banked. The Dead Zone remembers.', cx, cy + 30);
