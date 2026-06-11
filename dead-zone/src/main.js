@@ -117,6 +117,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'killx3', 'bomber', 'flamecone', 'flamering', 'energyring',
                     'slashfx', 'roof1', 'roof2', 'roof3', 'roof4',
                     'supplydrop', 'streakflame', 'bonusstar',
+                    'debris_plate', 'debris_gear', 'debris_arm', 'gunship',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -396,7 +397,8 @@ function placeProps(lv, world) {
     return true;
   };
   const scatter = (n0, wMin, wMax, hMin, hMax, kind, low) => {
-    const n = Math.round(n0 * af);
+    // global declutter factor: cleaner composition, more readable fights
+    const n = Math.round(n0 * af * 0.8);
     for (let i = 0, tries = 0; i < n && tries < n * 30; tries++) {
       const w = wMin + Math.random() * (wMax - wMin);
       const h = hMin + Math.random() * (hMax - hMin);
@@ -631,7 +633,7 @@ const PARTNER_LINES = ['Right behind you.', 'They just keep coming, huh.', 'Watc
 // lore drops from secret caches, per level
 const CACHE_LORE = {
   city: ['ECHO-6: "That stash... evac teams left those for survivors. Most never got opened."', 'ECHO-6: "Supply drop marker. Day one they thought this would be over in a week."'],
-  graveyard: ['ECHO-6: "Gravediggers\' kit. They were burying the bitten before anyone said the word \'zombie\'."', 'ECHO-6: "Someone was living out there between the crypts. Hope they made it."'],
+  graveyard: ['ECHO-6: "Gravediggers\' kit. They were burying the fallen before anyone said the word \'uprising\'."', 'ECHO-6: "Someone was living out there between the crypts. Hope they made it."'],
   sewer: ['ECHO-6: "Maintenance crews stashed gear down there when the tunnels were still safe."', 'ECHO-6: "That\'s a smuggler cache. The sewers were a highway before the runners moved in."'],
   hospital: ['ECHO-6: "Med supplies. St. Mercy staff hid them from the panic looting."', 'ECHO-6: "A nurse\'s go-bag. They stayed. All of them stayed."'],
   base: ['ECHO-6: "Delta\'s last requisitions. They never got to use them."', 'ECHO-6: "Hale\'s unit hid ammo dumps before the wall fell. She\'ll be glad you found one."'],
@@ -679,7 +681,7 @@ const LEVEL_CHATS = {
     ['partner', 'Then let\'s make it count. On your lead.'],
   ],
   graveyard: [
-    ['partner', 'A graveyard. During a zombie apocalypse. Fantastic.'],
+    ['partner', 'A graveyard. The machines dig here at night. Fantastic.'],
     ['hero', 'Stay off the soft dirt. Some of these graves are... fresh.'],
     ['partner', 'That one just MOVED. Tell me that one didn\'t just move.'],
   ],
@@ -806,6 +808,7 @@ function newGame() {
       r: 180 + Math.random() * 220, vx: 6 + Math.random() * 10, a: 0.05 + Math.random() * 0.05,
     })),
     bombers: [],
+    flybyT: 25 + Math.random() * 35,
     drops: [],
     supplyT: 35 + Math.random() * 25,
     cutin: null,
@@ -1367,9 +1370,10 @@ function applyPickup(type) {
 }
 
 function goreKill(x, y, radius, dirAngle, big) {
-  // dismemberment: REAL severed-part sprites fly on big deaths
+  // robot destruction: armor plates, gears and servo arms shear off on big
+  // kills, riding a shower of sparks and an oil burst
   if (big && game.gibs.length < 240) {
-    const parts = ['gore_arm', 'gore_leg', 'gore_head', 'gore_torso', 'gore_chunk'].filter((k) => SPRITES[k]);
+    const parts = ['debris_plate', 'debris_gear', 'debris_arm'].filter((k) => SPRITES[k]);
     for (let i = 0; i < 4; i++) {
       const la = Math.random() * Math.PI * 2;
       game.gibs.push({
@@ -1377,18 +1381,29 @@ function goreKill(x, y, radius, dirAngle, big) {
         vx: Math.cos(la) * (180 + Math.random() * 220),
         vy: Math.sin(la) * (180 + Math.random() * 220),
         rot: Math.random() * 6.28, rotV: (Math.random() - 0.5) * 10,
-        size: 9 + Math.random() * 7, color: '#6d1313',
+        size: 9 + Math.random() * 7, color: '#3a4048',
         sprite: parts.length ? parts[Math.floor(Math.random() * parts.length)] : null,
         life: 0.7 + Math.random() * 0.4,
       });
     }
   }
   sfx.playSquelch();
-  spawnBlood(x, y, big ? 50 : 22, '#7b1d1d', dirAngle);
-  spawnGibs(x, y, big ? 18 : 8, dirAngle);
+  spawnBlood(x, y, big ? 34 : 14, '#23272e', dirAngle); // oil burst
+  // spark fountain — the signature robot death read
+  for (let i = 0; i < (big ? 26 : 12) && game.particles.length < 900; i++) {
+    const sa = Math.random() * Math.PI * 2;
+    game.particles.push({
+      x, y,
+      vx: Math.cos(sa) * (160 + Math.random() * 320),
+      vy: Math.sin(sa) * (160 + Math.random() * 320),
+      life: 0.2 + Math.random() * 0.3,
+      color: Math.random() < 0.6 ? '#ffd54f' : '#ff8a3d', size: 2.5,
+    });
+  }
+  spawnGibs(x, y, big ? 14 : 6, dirAngle);
   stampDecal(x, y, radius, true);
   const p = game.player;
-  if (Math.hypot(p.x - x, p.y - y) < 140) addScreenBlood(big ? 1.5 : 0.8);
+  if (Math.hypot(p.x - x, p.y - y) < 140) addScreenBlood(big ? 1.0 : 0.5);
 }
 
 // ---- update -------------------------------------------------------------------
@@ -2416,6 +2431,26 @@ function update(dt) {
   }
   g.drops = (g.drops || []).filter((dr) => dr.life > 0);
 
+  // -- FLYBY EVENTS: allied gunships patrol overhead on a timer; on later
+  // levels some swing low and strafe the swarm (suggested SFX: rotor whump
+  // doppler pass + cannon burr on strafing runs)
+  if (gameMode === 'campaign') {
+    g.flybyT = (g.flybyT ?? 40) - dt;
+    if (g.flybyT <= 0) {
+      g.flybyT = 55 + Math.random() * 45;
+      const strafing = char.campaignLevel >= 3 && Math.random() < 0.35;
+      const dir2 = Math.random() < 0.5 ? 1 : -1;
+      g.bombers.push({
+        x: p.x - dir2 * 950, y: p.y + (Math.random() - 0.5) * 360,
+        vx: dir2 * (700 + Math.random() * 200),
+        dropT: 0.5, drops: strafing ? 3 : 0, life: 2.9, sp: 'gunship',
+      });
+      if (strafing) {
+        banner('GUNSHIP ON STATION', 'danger close — strafing run', '#80cbc4');
+        radio('echo', 'ECHO-6: "Friendly air. Keep your head down."', '#80cbc4');
+      }
+    }
+  }
   // -- combo air support: the jet streaks past, bombs walking beneath it
   for (const bm of g.bombers || []) {
     bm.x += bm.vx * dt;
@@ -2530,7 +2565,7 @@ function update(dt) {
             x: b.x, y: b.y,
             vx: Math.cos(sa2) * (140 + Math.random() * 160),
             vy: Math.sin(sa2) * (140 + Math.random() * 160),
-            life: 0.12 + Math.random() * 0.1, color: '#fff', size: 2.5,
+            life: 0.12 + Math.random() * 0.1, color: Math.random() < 0.5 ? '#fff' : '#ffd54f', size: 2.5,
           });
         }
         if (g.time - (g.lastTick || 0) > 0.05) {
@@ -2538,8 +2573,8 @@ function update(dt) {
           sfx.playHitTick();
         }
         if (b.hit.size >= b.pierce) b.life = 0;
-        spawnBlood(b.x, b.y, 11, '#7b1d1d', dir);
-        if (crit) spawnBlood(b.x, b.y, 8, '#b71c1c', dir); // arterial spray on crits
+        spawnBlood(b.x, b.y, 7, '#2a2e36', dir); // oil spray
+        if (crit) spawnBlood(b.x, b.y, 8, '#ffb74d', dir); // crit = molten spray
         if (!b.friendly) {
           // damage tiers paint the numbers: white -> yellow -> orange -> red
           const tierColor = crit ? '#ffd740' : dmg < 25 ? '#e8e8e8' : dmg < 60 ? '#ffee58' : dmg < 150 ? '#ff9100' : '#ff5252';
@@ -3845,7 +3880,7 @@ function drawHUD() {
   }
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
-  ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, view.w / 2, 46);
+  ctx.fillText(`SCORE ${game.score}   HOSTILES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, view.w / 2, 46);
   // combo meter — PUNCHES bigger on every kill, skull at 25+
   if (game.combo >= 2) {
     if (game.combo !== game._lastComboHud) {
@@ -3885,7 +3920,7 @@ function drawHUD() {
     ctx.shadowBlur = 0;
     ctx.font = '13px monospace';
     ctx.fillStyle = '#ef9a9a';
-    ctx.fillText(`HORDE REMAINING: ${game.survivalPool + game.zombies.length}`, view.w / 2, 124);
+    ctx.fillText(`SWARM REMAINING: ${game.survivalPool + game.zombies.length}`, view.w / 2, 124);
   }
   // frenzy warning
   if (game.time < game.frenzyUntil) {
@@ -5247,18 +5282,20 @@ function render(dt) {
   for (const bm of game.bombers || []) {
     ctx.save();
     ctx.translate(bm.x, bm.y);
-    if (SPRITES.bomber) {
+    const planeSp = SPRITES[bm.sp || 'bomber'];
+    if (planeSp) {
+      const fly = bm.vx < 0 ? -Math.PI / 2 : Math.PI / 2; // nose-up art
       ctx.save();
-      ctx.translate(26, 84);
-      ctx.rotate(Math.PI / 2);
+      ctx.translate(26, 84); // shadow cast far below the airframe
+      ctx.rotate(fly);
       ctx.globalAlpha = 0.3;
       ctx.filter = 'brightness(0)';
-      drawSpriteFit(SPRITES.bomber, 150, 150);
+      drawSpriteFit(planeSp, 150, 150);
       ctx.filter = 'none';
       ctx.restore();
       ctx.globalAlpha = 1;
-      ctx.rotate(Math.PI / 2); // nose-up art, flying east
-      drawSpriteFit(SPRITES.bomber, 150, 150);
+      ctx.rotate(fly);
+      drawSpriteFit(planeSp, 150, 150);
     } else {
       ctx.fillStyle = '#37474f';
       ctx.beginPath();
