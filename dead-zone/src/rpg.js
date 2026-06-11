@@ -197,7 +197,9 @@ export function loadCharacter() {
       ownedWeapons: parsed.ownedWeapons || base.ownedWeapons,
     };
     if (c.campaignLevel == null || !c.attrs) return null;
-    c.maxCampaign = Math.max(c.maxCampaign || 0, c.campaignLevel);
+    // saves written at the victory screen can point one past the last level
+    c.campaignLevel = Math.max(0, Math.min(4, c.campaignLevel | 0));
+    c.maxCampaign = Math.max(0, Math.min(4, Math.max(c.maxCampaign || 0, c.campaignLevel)));
     return c;
   } catch {
     return null;

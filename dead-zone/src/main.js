@@ -17,12 +17,12 @@ const ctx = canvas.getContext('2d');
 // logical viewport — the canvas backing store renders at devicePixelRatio
 // for crisp HiDPI/4K output; all game code works in logical pixels
 const view = { w: window.innerWidth, h: window.innerHeight };
-let dpr = Math.min(2.5, window.devicePixelRatio || 1);
+let dpr = Math.min(2, window.devicePixelRatio || 1);
 
 function resize() {
   view.w = window.innerWidth;
   view.h = window.innerHeight;
-  dpr = Math.min(2.5, window.devicePixelRatio || 1);
+  dpr = Math.min(2, window.devicePixelRatio || 1);
   canvas.width = Math.round(view.w * dpr);
   canvas.height = Math.round(view.h * dpr);
   canvas.style.width = view.w + 'px';
@@ -228,7 +228,7 @@ function button(x, y, w, h, cb, enabled = true) {
 }
 
 function level() {
-  return LEVELS[char.campaignLevel];
+  return LEVELS[Math.max(0, Math.min(LEVELS.length - 1, char.campaignLevel | 0))];
 }
 
 function banner(text, sub, color = '#d32f2f') {
@@ -663,7 +663,8 @@ function startLevel() {
   }
   if (char.campaignLevel === 0) banner('THE OUTBREAK', 'protect who you can', '#ef9a9a');
   // resume from the last checkpoint reached on this level
-  if (char.checkpoint && char.checkpoint.lvl === char.campaignLevel && char.checkpoint.wave > 1) {
+  if (char.checkpoint && char.checkpoint.lvl === char.campaignLevel &&
+      char.checkpoint.wave > 1 && char.checkpoint.wave <= level().waves) {
     game.wave = char.checkpoint.wave - 1;
     banner('CHECKPOINT', `resuming at wave ${char.checkpoint.wave}`, '#80cbc4');
   }
@@ -757,6 +758,7 @@ function completeLevel() {
 // ---- gore --------------------------------------------------------------------
 
 function spawnBlood(x, y, n, color, dirAngle = null) {
+  if (game.particles.length > 900) return;
   for (let i = 0; i < n; i++) {
     const a = dirAngle != null ? dirAngle + (Math.random() - 0.5) * 1.1 : Math.random() * Math.PI * 2;
     const s = 60 + Math.random() * 260;
@@ -769,6 +771,7 @@ function spawnBlood(x, y, n, color, dirAngle = null) {
 }
 
 function spawnGibs(x, y, n, dirAngle = null) {
+  if (game.gibs.length > 260) return;
   const colors = ['#7b1d1d', '#5d1414', '#8e2a2a', '#4a3f3f'];
   for (let i = 0; i < n; i++) {
     const a = dirAngle != null ? dirAngle + (Math.random() - 0.5) * 1.6 : Math.random() * Math.PI * 2;
@@ -1410,7 +1413,10 @@ function update(dt) {
     z.groanTimer -= dt;
     if (z.groanTimer <= 0) {
       z.groanTimer = 4 + Math.random() * 8;
-      sfx.playGroan(Math.min(1, distP / 1100));
+      if (g.time - (g.lastGroan || 0) > 0.35 && distP < 900) {
+        g.lastGroan = g.time;
+        sfx.playGroan(Math.min(1, distP / 1100));
+      }
     }
     if (z.type === 'boss') {
       z.minionTimer -= dt;
@@ -1806,7 +1812,12 @@ function update(dt) {
   }
 }
 
-const SCRAP_DROPS = { walker: [3, 3], runner: [5, 3], brute: [12, 6], boss: [80, 40] };
+const SCRAP_DROPS = {
+  walker: [3, 3], runner: [5, 3], brute: [12, 6], boss: [80, 40],
+  crawler: [2, 3], spitter: [6, 4], exploder: [6, 4], screamer: [8, 5],
+  rogue: [10, 6], granny: [8, 5], cop: [8, 5], hazmat: [9, 5],
+  butcher: [14, 8], dog: [2, 3], stalker: [6, 4],
+};
 
 function killZombie(z, dirAngle) {
   const g = game;
@@ -1837,8 +1848,11 @@ function killZombie(z, dirAngle) {
   if (z.explodes) explode(z.x, z.y, z.explodes.radius, z.damage * 2.2, true);
   dropLoot(z.x, z.y, z.type === 'brute' || z.type === 'boss');
   goreKill(z.x, z.y, z.radius, dirAngle, z.type === 'boss' || z.type === 'brute');
-  g.corpses.push({ x: z.x, y: z.y, angle: dirAngle ?? Math.random() * Math.PI * 2, type: z.type, radius: z.radius, t: 12 });
-  const [base, rand] = SCRAP_DROPS[z.type];
+  if (g.corpses.length < 140) {
+    g.corpses.push({ x: z.x, y: z.y, angle: dirAngle ?? Math.random() * Math.PI * 2, type: z.type, radius: z.radius, t: 12 });
+  }
+  if (g.dmgNumbers.length > 90) g.dmgNumbers.splice(0, g.dmgNumbers.length - 90);
+  const [base, rand] = SCRAP_DROPS[z.type] || [4, 4];
   const total = base + Math.floor(Math.random() * rand);
   const piles = z.type === 'boss' ? 6 : 1 + Math.floor(Math.random() * 2);
   for (let i = 0; i < piles; i++) {
@@ -2112,13 +2126,23 @@ function drawZombie(z) {
   const slowed = game.time < z.slowUntil;
   ctx.save();
   ctx.translate(z.x, z.y);
-  const grad = ctx.createRadialGradient(0, 0, z.radius * 0.3, 0, 0, z.radius * 2.2);
-  grad.addColorStop(0, z.glow);
-  grad.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(0, 0, z.radius * 2.2, 0, Math.PI * 2);
-  ctx.fill();
+  // per-zombie gradient glows get expensive past ~150 on screen
+  if (game.zombies.length < 150) {
+    const grad = ctx.createRadialGradient(0, 0, z.radius * 0.3, 0, 0, z.radius * 2.2);
+    grad.addColorStop(0, z.glow);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, z.radius * 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = z.glow;
+    ctx.globalAlpha = 0.25;
+    ctx.beginPath();
+    ctx.arc(0, 0, z.radius * 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   const { t: target } = zombieTarget(z);
   const a = Math.atan2(target.y - z.y, target.x - z.x);
   const sprite = SPRITES[z.type];
@@ -3373,13 +3397,22 @@ function render(dt) {
   ctx.save();
   ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
   drawGround();
-  for (const co of game.corpses) drawCorpse(co);
+  for (const co of game.corpses) {
+    if (co.x < cam.x - 80 || co.x > cam.x + view.w + 80 || co.y < cam.y - 80 || co.y > cam.y + view.h + 80) continue;
+    drawCorpse(co);
+  }
   drawHiggs();
   drawCaches();
   drawScraps();
-  for (const c of game.civilians) drawCivilian(c);
+  for (const c of game.civilians) {
+    if (c.x < cam.x - 60 || c.x > cam.x + view.w + 60 || c.y < cam.y - 60 || c.y > cam.y + view.h + 60) continue;
+    drawCivilian(c);
+  }
   for (const a of game.allies) drawAlly(a);
-  for (const z of game.zombies) drawZombie(z);
+  for (const z of game.zombies) {
+    if (z.x < cam.x - 120 || z.x > cam.x + view.w + 120 || z.y < cam.y - 120 || z.y > cam.y + view.h + 120) continue;
+    drawZombie(z);
+  }
   for (const b of game.bullets) {
     ctx.strokeStyle = b.color;
     ctx.lineWidth = 3;
@@ -3465,6 +3498,7 @@ function render(dt) {
   }
   drawPlayer();
   // explosions: flash + expanding ring (screams are a pale ring only)
+  // (world entities above are culled to the camera; effects below are cheap)
   for (const ex of game.explosions) {
     const t = 1 - ex.t / 0.45;
     if (ex.scream) {
@@ -3567,6 +3601,15 @@ function handleClicks() {
 let wasGpConnected = false;
 
 function frame(now) {
+  try {
+    frameInner(now);
+  } catch (err) {
+    console.error('frame error (recovered):', err);
+  }
+  requestAnimationFrame(frame);
+}
+
+function frameInner(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
   pollGamepad();
@@ -3642,6 +3685,5 @@ function frame(now) {
 
   render(dt);
   consumePressed();
-  requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
