@@ -110,6 +110,14 @@ function drawSpriteFit(sp, maxW, maxH) {
 const titleArt = new Image();
 titleArt.src = asset('title-bg.png');
 
+// living title screen: the generated horde video loops behind the menu
+const titleVideo = document.createElement('video');
+titleVideo.src = asset('levels/horde-video.mp4');
+titleVideo.muted = true;
+titleVideo.loop = true;
+titleVideo.playsInline = true;
+titleVideo.play().catch(() => {});
+
 // ---- state -----------------------------------------------------------------
 
 const HIGGS = { radius: 190, slowFactor: 0.25, slowDuration: 5, knockback: 420 };
@@ -3145,7 +3153,25 @@ function drawTitle() {
   const cy = view.h / 2;
   const t = performance.now() / 1000;
 
-  if (titleArt.complete && titleArt.naturalWidth) {
+  // animated horde video background when it's ready, Ken Burns art otherwise
+  if (titleVideo.readyState >= 2 && titleVideo.videoWidth) {
+    if (titleVideo.paused) titleVideo.play().catch(() => {});
+    const s = Math.max(view.w / titleVideo.videoWidth, view.h / titleVideo.videoHeight);
+    const w = titleVideo.videoWidth * s;
+    const h = titleVideo.videoHeight * s;
+    ctx.drawImage(titleVideo, (view.w - w) / 2, (view.h - h) / 2, w, h);
+    // DEAD ZONE logo over the video
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 92px monospace';
+    ctx.fillStyle = '#b71c1c';
+    ctx.shadowColor = '#ff1744';
+    ctx.shadowBlur = 28 + Math.sin(t * 2) * 10;
+    ctx.fillText('DEAD ZONE', cx, view.h * 0.3);
+    ctx.restore();
+    drawTitleOverlay(t, cx);
+    return;
+  } else if (titleArt.complete && titleArt.naturalWidth) {
     const zoom = 1.06 + Math.sin(t * 0.15) * 0.05;
     const s = Math.max(view.w / titleArt.naturalWidth, view.h / titleArt.naturalHeight) * zoom;
     const w = titleArt.naturalWidth * s;
@@ -3187,6 +3213,14 @@ function drawTitle() {
       ctx.globalAlpha = 1;
     }
 
+    drawTitleOverlay(t, cx);
+    return;
+  }
+
+  drawTitleFallback(t, cx, cy);
+}
+
+function drawTitleOverlay(t, cx) {
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fillRect(0, view.h - 170, view.w, 170);
     ctx.save();
@@ -3213,9 +3247,9 @@ function drawTitle() {
       ctx.fillText('[N] new campaign (wipes save)', cx, view.h - 58);
     }
     ctx.restore();
-    return;
-  }
+}
 
+function drawTitleFallback(t, cx, cy) {
   ctx.save();
   ctx.textAlign = 'center';
   ctx.font = 'bold 96px monospace';
