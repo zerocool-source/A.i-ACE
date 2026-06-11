@@ -27,6 +27,9 @@ export function newCharacter() {
     higgsBatteries: 0,
     grenades: 3,
     dynamite: 1,
+    nades: { frag: 3, smoke: 2, decoy: 2 },
+    shields: ['blue'],
+    shieldType: 'blue',
     campaignLevel: 0, // index into LEVELS
     maxCampaign: 0, // highest level unlocked (for level select)
     totalKills: 0,
@@ -107,6 +110,7 @@ export function shopCatalog(char, playerHp) {
       flak: 'Wall of shrapnel — 12 pellets per blast [7]',
       railgun: 'Pierces an entire horde in a straight line [8]',
       sniper: 'One shot, five kills, across the whole map [9]',
+      mortar: 'Lobbed explosive shells — every round detonates [0]',
     };
     items.push({
       id: 'buy-' + w,
@@ -145,13 +149,35 @@ export function shopCatalog(char, playerHp) {
     maxed: char.higgsBatteries >= MAX_BATTERIES,
     buy: (c) => c.higgsBatteries++,
   });
+  if (!char.shields.includes('flame')) {
+    items.push({
+      id: 'shield-flame',
+      name: '★ FLAME SHIELD CORE',
+      desc: 'Higgs variant: burns everything inside the bubble [C swaps]',
+      cost: 600, maxed: false,
+      buy: (c) => c.shields.push('flame'),
+    });
+  }
+  if (!char.shields.includes('health')) {
+    items.push({
+      id: 'shield-health',
+      name: '★ HEALTH SHIELD CORE',
+      desc: 'Higgs variant: heals you and repels the horde [C swaps]',
+      cost: 600, maxed: false,
+      buy: (c) => c.shields.push('health'),
+    });
+  }
   items.push({
     id: 'nades',
-    name: 'GRENADES x3',
-    desc: 'Throw with [G] — 110px blast',
-    cost: 120,
-    maxed: char.grenades >= 12,
-    buy: (c) => (c.grenades = (c.grenades || 0) + 3),
+    name: 'GRENADE PACK',
+    desc: '+2 frag, +1 smoke, +1 decoy — [G] throw, [T] cycle',
+    cost: 140,
+    maxed: (char.nades?.frag || 0) >= 12,
+    buy: (c) => {
+      c.nades.frag += 2;
+      c.nades.smoke += 1;
+      c.nades.decoy += 1;
+    },
   });
   items.push({
     id: 'dyna',
@@ -195,11 +221,16 @@ export function loadCharacter() {
       attrs: { ...base.attrs, ...(parsed.attrs || {}) },
       weaponTiers: { ...base.weaponTiers, ...(parsed.weaponTiers || {}) },
       ownedWeapons: parsed.ownedWeapons || base.ownedWeapons,
+      nades: { ...base.nades, ...(parsed.nades || {}) },
+      shields: parsed.shields && parsed.shields.length ? parsed.shields : base.shields,
     };
+    // migrate the old single grenade counter into frag grenades
+    if (parsed.grenades != null && !parsed.nades) c.nades.frag = Math.max(c.nades.frag, parsed.grenades);
+    if (!c.shields.includes(c.shieldType)) c.shieldType = c.shields[0];
     if (c.campaignLevel == null || !c.attrs) return null;
     // saves written at the victory screen can point one past the last level
-    c.campaignLevel = Math.max(0, Math.min(4, c.campaignLevel | 0));
-    c.maxCampaign = Math.max(0, Math.min(4, Math.max(c.maxCampaign || 0, c.campaignLevel)));
+    c.campaignLevel = Math.max(0, Math.min(9, c.campaignLevel | 0));
+    c.maxCampaign = Math.max(0, Math.min(9, Math.max(c.maxCampaign || 0, c.campaignLevel)));
     return c;
   } catch {
     return null;

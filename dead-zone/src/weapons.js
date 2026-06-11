@@ -47,13 +47,18 @@ export const WEAPONS = {
     fireInterval: 1.4, reloadTime: 2.8, spread: 0, pellets: 1,
     bulletSpeed: 2800, color: '#fff59d', pierce: 5, price: 1500,
   },
+  mortar: {
+    name: 'MORTAR', key: '0', auto: false, damage: 40, magSize: 4,
+    fireInterval: 1.3, reloadTime: 3.0, spread: 0.05, pellets: 1,
+    bulletSpeed: 620, color: '#ffcc80', pierce: 1, price: 1800, mortar: true,
+  },
 };
 
-export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun', 'sniper'];
+export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun', 'sniper', 'mortar'];
 
 // reserve ammo carried per weapon at level start; the pistol never runs dry
 export const AMMO_RESERVE = {
   pistol: Infinity, rifle: 150, shotgun: 42, smg: 210, magnum: 36,
-  minigun: 480, flak: 56, railgun: 20, sniper: 25,
+  minigun: 480, flak: 56, railgun: 20, sniper: 25, mortar: 18,
 };
 export const STARTING_WEAPONS = ['pistol', 'rifle', 'shotgun', 'smg'];

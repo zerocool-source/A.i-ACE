@@ -121,6 +121,7 @@ titleVideo.play().catch(() => {});
 // ---- state -----------------------------------------------------------------
 
 const HIGGS = { radius: 190, slowFactor: 0.25, slowDuration: 5, knockback: 420 };
+const SHIELD_COLORS = { blue: '#42a5f5', flame: '#ff7043', health: '#66bb6a' };
 const WORLD_BASE = { w: 3400, h: 2300 };
 // blood decals render at half resolution so huge worlds stay light on memory
 const DECAL_SCALE = 0.5;
@@ -380,9 +381,36 @@ function placeProps(lv, world) {
       scatter(18, 36, 110, 30, 44, 'sandbag', true);
       scatter(12, 40, 56, 40, 56, 'crate', true);
       break;
+    case 'mall':
+      edgeBlocks(8, 'building', 280, 190);
+      midBlocks(7, 'building', 260, 180);
+      scatter(10, 36, 52, 36, 52, 'crate', true);
+      scatter(8, 30, 42, 60, 84, 'gurney', true);
+      break;
+    case 'subway':
+      edgeBlocks(5, 'pipe', 380, 64);
+      midBlocks(4, 'building', 240, 150);
+      scatter(12, 200, 340, 44, 60, 'pipe');
+      scatter(8, 40, 56, 40, 56, 'crate', true);
+      break;
+    case 'prison':
+      edgeBlocks(8, 'bunker', 250, 170);
+      midBlocks(5, 'bunker', 230, 150);
+      scatter(16, 36, 110, 30, 44, 'sandbag', true);
+      break;
+    case 'docks':
+      midBlocks(9, 'cabinet', 200, 90); // container stacks
+      scatter(14, 64, 90, 32, 44, 'car');
+      scatter(12, 40, 60, 40, 60, 'crate', true);
+      break;
+    case 'rooftops':
+      edgeBlocks(10, 'building', 300, 200);
+      midBlocks(8, 'building', 260, 180);
+      scatter(10, 36, 52, 36, 52, 'cabinet');
+      break;
   }
   // one big landmark set-piece per map
-  if (lv.key === 'city' || lv.key === 'base') scatter(1 / af, 220, 260, 130, 160, 'wreck');
+  if (lv.key === 'city' || lv.key === 'base' || lv.key === 'docks') scatter(1 / af, 220, 260, 130, 160, 'wreck');
   if (lv.key === 'graveyard') scatter(1 / af, 120, 140, 120, 140, 'statue');
   return props;
 }
@@ -488,6 +516,8 @@ function newGame() {
       weapon: 'pistol',
       mags: Object.fromEntries(WEAPON_ORDER.map((w) => [w, weaponStats(char, w).magSize])),
       reserve: { ...AMMO_RESERVE },
+      armorHP: derived(char).armor * 25,
+      armorMax: Math.max(1, derived(char).armor * 25),
       fireCooldown: 0,
       reloading: 0,
       muzzleFlash: 0,
@@ -518,6 +548,12 @@ function newGame() {
     frenzyTimer: 23,
     frenzyUntil: 0,
     throwables: [],
+    strikes: [],
+    smokes: [],
+    decoy: null,
+    streak: 0,
+    streakFired: {},
+    nadeSel: 'frag',
     killT: 0,
     superBoss: null,
     survivalT: null, // wave-3 countdown
@@ -694,6 +730,11 @@ function nextWave() {
     sfx.playScream();
     return;
   }
+  if (g.wave > 1) {
+    const d0 = derived(char);
+    g.player.hp = Math.min(d0.maxHp, g.player.hp + 25);
+    g.player.armorHP = Math.min(g.player.armorMax, g.player.armorHP + 25);
+  }
   const count = g.wave === 1 ? 100 : 300;
   const comp = [];
   for (let i = 0; i < Math.round(count * lv.countMult); i++) comp.push(randomZombieType());
@@ -832,12 +873,8 @@ function explode(x, y, radius, damage, hurtsPlayer) {
   if (hurtsPlayer) {
     const p = g.player;
     const dp = Math.hypot(p.x - x, p.y - y);
-    if (dp < radius + p.radius && g.time >= p.invulnUntil) {
-      const dmg = Math.max(1, Math.round(damage * 0.4) - effArmor());
-      p.hp -= dmg;
-      p.hurtFlash = 0.3;
-      addScreenBlood(1.5);
-      g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#ef5350', life: 0.8, vy: -50 });
+    if (dp < radius + p.radius) {
+      damagePlayer(Math.round(damage * 0.4));
     }
     for (const a of g.allies) {
       if (a.down) continue;
@@ -851,6 +888,27 @@ function explode(x, y, radius, damage, hurtsPlayer) {
 
 function effArmor() {
   return derived(char).armor + (game.buffs.shield > 0 ? 3 : 0);
+}
+
+// armor depletes FIRST, then health; armor hits don't break your killstreak
+function damagePlayer(dmg) {
+  const g = game;
+  const p = g.player;
+  if (g.time < p.invulnUntil) return;
+  if (g.buffs.shield > 0) dmg = Math.max(1, dmg - 3);
+  if (p.armorHP > 0) {
+    const a = Math.min(p.armorHP, dmg);
+    p.armorHP -= a;
+    dmg -= a;
+    p.hurtFlash = Math.max(p.hurtFlash, 0.12);
+  }
+  if (dmg <= 0) return;
+  p.hp -= dmg;
+  p.hurtFlash = 0.25;
+  g.streak = 0; // a hit to HEALTH resets the killstreak
+  addScreenBlood(1);
+  spawnBlood(p.x, p.y, 8, '#c62828');
+  g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${Math.round(dmg)}`, color: '#ef5350', life: 0.8, vy: -50 });
 }
 
 // route ally damage through the partner's energy shield
@@ -933,7 +991,11 @@ function cycleWeapon(dir) {
 }
 
 function zombieTarget(z) {
-  // the horde hunts the player and only the player
+  // a live decoy outranks the player for everything non-human
+  const dc = game.decoy;
+  if (dc && !z.human && game.time < dc.until) {
+    return { t: { x: dc.x, y: dc.y, radius: 6 }, d: Math.hypot(dc.x - z.x, dc.y - z.y) };
+  }
   const p = game.player;
   return { t: p, d: Math.hypot(p.x - z.x, p.y - z.y) };
 }
@@ -1081,8 +1143,9 @@ function update(dt) {
           y: p.y + Math.sin(p.angle) * (p.radius + 10),
           vx: Math.cos(a) * ws.bulletSpeed,
           vy: Math.sin(a) * ws.bulletSpeed,
-          damage: ws.damage, color: ws.color, life: 1.2,
+          damage: ws.damage, color: ws.color, life: ws.mortar ? 0.85 : 1.2,
           pierce: ws.pierce ?? 1, hit: new Set(), friendly: false,
+          mortar: !!ws.mortar,
         });
       }
       if (p.mags[p.weapon] === 0 && p.reserve[p.weapon] > 0) {
@@ -1094,7 +1157,7 @@ function update(dt) {
 
   // -- throwables: grenades [G] and dynamite [H]
   const lob = (kind) => {
-    const speed = kind === 'nade' ? 540 : 420;
+    const speed = kind === 'dyna' ? 420 : 540;
     g.throwables.push({
       x: p.x, y: p.y,
       vx: Math.cos(p.angle) * speed, vy: Math.sin(p.angle) * speed,
@@ -1103,9 +1166,14 @@ function update(dt) {
     sfx.playEmptyClick();
     saveCharacter(char);
   };
-  if ((wasPressed('g') || gpPressed('up')) && char.grenades > 0) {
-    char.grenades--;
-    lob('nade');
+  if (wasPressed('t')) {
+    const order = ['frag', 'smoke', 'decoy'];
+    g.nadeSel = order[(order.indexOf(g.nadeSel) + 1) % order.length];
+    g.dmgNumbers.push({ x: p.x, y: p.y - 28, txt: g.nadeSel.toUpperCase() + ` ×${char.nades[g.nadeSel]}`, color: '#aed581', life: 0.9, vy: -45 });
+  }
+  if ((wasPressed('g') || gpPressed('up')) && char.nades[g.nadeSel] > 0) {
+    char.nades[g.nadeSel]--;
+    lob(g.nadeSel);
   }
   if ((wasPressed('h') || gpPressed('down')) && char.dynamite > 0) {
     char.dynamite--;
@@ -1118,8 +1186,15 @@ function update(dt) {
     tb.vy *= 0.93;
     tb.fuse -= dt;
     if (tb.fuse <= 0) {
-      if (tb.kind === 'nade') explode(tb.x, tb.y, 110, 170, false);
-      else explode(tb.x, tb.y, 180, 340, false);
+      if (tb.kind === 'frag') explode(tb.x, tb.y, 110, 170, false);
+      else if (tb.kind === 'dyna') explode(tb.x, tb.y, 180, 340, false);
+      else if (tb.kind === 'smoke') {
+        g.smokes.push({ x: tb.x, y: tb.y, r: 140, until: g.time + 7 });
+        sfx.playEmptyClick();
+      } else if (tb.kind === 'decoy') {
+        g.decoy = { x: tb.x, y: tb.y, until: g.time + 6 };
+        radio('', 'decoy out — they took the bait', '#aed581');
+      }
     }
   }
   g.throwables = g.throwables.filter((tb) => tb.fuse > 0);
@@ -1138,6 +1213,13 @@ function update(dt) {
   const h = g.higgs;
   h.charge = Math.min(1, h.charge + dt / d.higgsCooldown);
   if (h.ringT >= 0) h.ringT += dt;
+  // C swaps between owned shield cores
+  if (wasPressed('c') && char.shields.length > 1) {
+    const i = char.shields.indexOf(char.shieldType);
+    char.shieldType = char.shields[(i + 1) % char.shields.length];
+    saveCharacter(char);
+    g.dmgNumbers.push({ x: p.x, y: p.y - 28, txt: char.shieldType.toUpperCase() + ' SHIELD', color: SHIELD_COLORS[char.shieldType], life: 1, vy: -45 });
+  }
   if ((wasPressed('e') || gpPressed('y')) && h.charge >= 1) {
     h.charge = 0;
     h.activeUntil = g.time + HIGGS.slowDuration;
@@ -1147,11 +1229,36 @@ function update(dt) {
       const dist = Math.hypot(z.x - p.x, z.y - p.y);
       if (dist < HIGGS.radius + z.radius) {
         z.slowUntil = g.time + HIGGS.slowDuration;
+        // BLUE pulse: the first wave caught in the blast just dies
+        if (char.shieldType === 'blue' && dist < 140) {
+          z.hp -= 400;
+          z.flash = 0.1;
+          if (z.hp <= 0) killZombie(z, Math.atan2(z.y - p.y, z.x - p.x));
+        }
         const k = HIGGS.knockback / Math.max(dist, 30);
         z.x += (z.x - p.x) * k * 0.2;
         z.y += (z.y - p.y) * k * 0.2;
       }
     }
+  }
+  // active shield aura effects
+  if (g.time < h.activeUntil) {
+    for (const z of g.zombies) {
+      const dist = Math.hypot(z.x - p.x, z.y - p.y);
+      if (dist >= HIGGS.radius + z.radius) continue;
+      if (char.shieldType === 'flame') {
+        // flame core: everything inside burns
+        z.hp -= 70 * dt;
+        if (Math.random() < dt * 6) spawnBlood(z.x, z.y, 2, '#ff7043');
+        if (z.hp <= 0) killZombie(z, Math.atan2(z.y - p.y, z.x - p.x));
+      } else if (char.shieldType === 'health') {
+        // health core: constant repulsion
+        const push = 170 * dt / Math.max(dist, 20);
+        z.x += (z.x - p.x) * push;
+        z.y += (z.y - p.y) * push;
+      }
+    }
+    if (char.shieldType === 'health') p.hp = Math.min(d.maxHp, p.hp + 8 * dt);
   }
 
   // -- spawning / wave progression
@@ -1226,7 +1333,7 @@ function update(dt) {
       banner('YOU SURVIVED THE 5,000', 'but something bigger is coming…', '#ffd54f');
       sfx.playFanfare();
       // …and now the SUPER BOSS, with its goon army
-      const sb = SUPERBOSSES[Math.floor(Math.random() * SUPERBOSSES.length)];
+      const sb = SUPERBOSSES[char.campaignLevel % SUPERBOSSES.length]; // unique boss per level
       const bz = spawnLevelZombie('boss');
       bz.hp = bz.maxHp = bz.hp * 4;
       bz.radius = 54;
@@ -1285,7 +1392,12 @@ function update(dt) {
     const distP = Math.hypot(p.x - z.x, p.y - z.y);
     if (fieldActive && distP < HIGGS.radius + z.radius) z.slowUntil = g.time + 0.3;
     const slowed = g.time < z.slowUntil;
-    let spdZ = z.speed * (slowed ? HIGGS.slowFactor : 1);
+    // the blue core stops zombies dead inside the live bubble
+    const stopFactor = fieldActive && char.shieldType === 'blue' && distP < HIGGS.radius + z.radius ? 0.02 : HIGGS.slowFactor;
+    let spdZ = z.speed * (slowed ? stopFactor : 1);
+    for (const sm of g.smokes) {
+      if (Math.hypot(z.x - sm.x, z.y - sm.y) < sm.r) { spdZ *= 0.35; break; }
+    }
     if (z.lunges && distT < 160) spdZ *= 1.8; // crawler pounce
     if (g.time < z.boostUntil) spdZ *= 1.5; // screamer haste
     if (frenzy && !z.human) spdZ *= 3; // FRENZY surge
@@ -1357,14 +1469,7 @@ function update(dt) {
       if (distT < z.radius + p.radius + 4) {
         // the player is the prey
         z.attackCooldown = 0.8;
-        if (g.time >= p.invulnUntil) { // dash i-frames
-          const dmg = Math.max(1, z.damage - effArmor());
-          p.hp -= dmg;
-          p.hurtFlash = 0.25;
-          addScreenBlood(1);
-          spawnBlood(p.x, p.y, 8, '#c62828');
-          g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#ef5350', life: 0.8, vy: -50 });
-        }
+        damagePlayer(z.damage);
       } else {
         // opportunistic swipes at anything that blunders into reach
         let swiped = false;
@@ -1477,16 +1582,22 @@ function update(dt) {
   // -- squad AI: stick near the player, light up the nearest zombie
   for (const a of g.allies) {
     if (a.down) {
-      // the medic can drag squadmates back onto their feet mid-wave
+      // the medic can drag squadmates back onto their feet mid-wave —
+      // and YOU can revive anyone by standing over them
       const medic = g.allies.find((m) => m.healAura && !m.down);
-      if (medic && Math.hypot(medic.x - a.x, medic.y - a.y) < medic.healAura) {
-        a.reviveTimer += dt;
+      const medicClose = medic && Math.hypot(medic.x - a.x, medic.y - a.y) < medic.healAura;
+      const playerClose = Math.hypot(p.x - a.x, p.y - a.y) < 56;
+      if (medicClose || playerClose) {
+        a.reviveTimer += dt * (playerClose ? 2 : 1);
         if (a.reviveTimer > 6) {
           a.down = false;
           a.hp = a.maxHp * 0.4;
+          if (a.shieldMax) a.shield = a.shieldMax * 0.5;
           a.reviveTimer = 0;
-          banner(`${a.name} IS BACK UP`, 'patched by DOC OKAFOR', '#f8bbd0');
+          banner(`${a.name} IS BACK UP`, playerClose ? 'you got them on their feet' : 'patched by DOC OKAFOR', '#f8bbd0');
         }
+      } else {
+        a.reviveTimer = Math.max(0, a.reviveTimer - dt * 0.5);
       }
       continue;
     }
@@ -1546,14 +1657,17 @@ function update(dt) {
           a.reloading = a.reloadTime;
         } else {
           a.mag--;
-          a.fireCooldown = a.fireInterval;
-          sfx.playGunshot(a.type === 'commander' ? 'magnum' : 'rifle');
+          // the partner runs whatever YOU are running
+          const mirror = a.type === 'partner' ? weaponStats(char, p.weapon) : null;
+          a.fireCooldown = mirror ? Math.max(0.12, mirror.fireInterval * 1.5) : a.fireInterval;
+          sfx.playGunshot(mirror ? p.weapon : a.type === 'commander' ? 'magnum' : 'rifle');
           const sp = a.angle + (Math.random() - 0.5) * 0.08;
           g.bullets.push({
             x: a.x + Math.cos(a.angle) * 20, y: a.y + Math.sin(a.angle) * 20,
             vx: Math.cos(sp) * 1200, vy: Math.sin(sp) * 1200,
-            damage: a.damage, color: a.color, life: 1.0,
-            pierce: a.type === 'commander' ? 2 : 1, hit: new Set(), friendly: true,
+            damage: mirror ? mirror.damage * 0.6 : a.damage,
+            color: mirror ? mirror.color : a.color, life: 1.0,
+            pierce: mirror ? mirror.pierce : a.type === 'commander' ? 2 : 1, hit: new Set(), friendly: true,
           });
         }
       }
@@ -1593,12 +1707,8 @@ function update(dt) {
       s.life = 0;
       continue;
     }
-    if (Math.hypot(p.x - s.x, p.y - s.y) < p.radius + 6 && g.time >= p.invulnUntil) {
-      const dmg = Math.max(1, s.damage - effArmor());
-      p.hp -= dmg;
-      p.hurtFlash = 0.2;
-      addScreenBlood(0.6);
-      g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${dmg}`, color: '#cddc39', life: 0.8, vy: -50 });
+    if (Math.hypot(p.x - s.x, p.y - s.y) < p.radius + 6) {
+      damagePlayer(s.damage);
       s.life = 0;
     }
     for (const a of g.allies) {
@@ -1614,6 +1724,17 @@ function update(dt) {
   // -- explosions animate
   for (const ex of g.explosions) ex.t -= dt;
   g.explosions = g.explosions.filter((ex) => ex.t > 0);
+
+  // -- smoke clouds dissipate, decoy expires
+  g.smokes = g.smokes.filter((sm) => g.time < sm.until);
+  if (g.decoy && g.time >= g.decoy.until) g.decoy = null;
+
+  // -- queued air support detonates
+  for (const st of g.strikes) {
+    st.t -= dt;
+    if (st.t <= 0) explode(st.x, st.y, 100, 220, false);
+  }
+  g.strikes = g.strikes.filter((st) => st.t > 0);
 
   // -- locked doors: pay scrap to open, loot waits inside
   for (let i = g.props.length - 1; i >= 0; i--) {
@@ -1739,6 +1860,12 @@ function update(dt) {
       }
     }
   }
+  for (const b of g.bullets) {
+    if (b.mortar && b.life <= 0 && !b.boomed) {
+      b.boomed = true;
+      explode(b.x, b.y, 95, 170, false); // every mortar round detonates
+    }
+  }
   g.bullets = g.bullets.filter(
     (b) => b.life > 0 && b.x > -50 && b.x < g.world.w + 50 && b.y > -50 && b.y < g.world.h + 50
   );
@@ -1827,6 +1954,41 @@ function killZombie(z, dirAngle) {
     g.superBoss = null;
     banner('SUPER BOSS DOWN', z.super, '#ffd700');
     addScreenBlood(2);
+  }
+  // killstreaks: build kills without your HEALTH being hit
+  g.streak++;
+  if (g.streak >= 25 && !g.streakFired[25]) {
+    g.streakFired[25] = true;
+    banner('KILLSTREAK ×25', 'AIRSTRIKE INBOUND', '#ffd54f');
+    sfx.playFanfare();
+    const targets = g.zombies.filter((zz) => zz.hp > 0 && Math.hypot(zz.x - g.player.x, zz.y - g.player.y) < 700);
+    for (let i = 0; i < 6; i++) {
+      const tz = targets[Math.floor(Math.random() * Math.max(1, targets.length))];
+      g.strikes.push({
+        x: tz ? tz.x : g.player.x + (Math.random() - 0.5) * 500,
+        y: tz ? tz.y : g.player.y + (Math.random() - 0.5) * 500,
+        t: 0.5 + i * 0.3,
+      });
+    }
+  }
+  if (g.streak >= 50 && !g.streakFired[50]) {
+    g.streakFired[50] = true;
+    banner('KILLSTREAK ×50', 'MORTAR BARRAGE', '#ffd54f');
+    sfx.playFanfare();
+    for (let i = 0; i < 12; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 120 + Math.random() * 480;
+      g.strikes.push({ x: g.player.x + Math.cos(a) * r, y: g.player.y + Math.sin(a) * r, t: 0.4 + i * 0.25 });
+    }
+  }
+  if (g.streak >= 75 && !g.streakFired[75]) {
+    g.streakFired[75] = true;
+    banner('KILLSTREAK ×75', 'FULL RESTORE + ARMOR', '#ffd54f');
+    sfx.playFanfare();
+    g.player.hp = derived(char).maxHp;
+    g.player.armorHP = g.player.armorMax;
+    g.streak = 0;
+    g.streakFired = {};
   }
   g.score += z.score;
   g.kills++;
@@ -2299,20 +2461,22 @@ function drawHiggs() {
   if (active) {
     ctx.save();
     ctx.translate(p.x, p.y);
+    const rgbMap = { blue: '33,150,243', flame: '255,112,67', health: '102,187,106' };
+    const rgb = rgbMap[char.shieldType] || rgbMap.blue;
     const grad = ctx.createRadialGradient(0, 0, HIGGS.radius * 0.6, 0, 0, HIGGS.radius);
-    grad.addColorStop(0, 'rgba(33,150,243,0.04)');
-    grad.addColorStop(1, 'rgba(33,150,243,0.18)');
+    grad.addColorStop(0, `rgba(${rgb},0.04)`);
+    grad.addColorStop(1, `rgba(${rgb},0.2)`);
     ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.arc(0, 0, HIGGS.radius, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(100,181,246,0.7)';
+    ctx.strokeStyle = `rgba(${rgb},0.75)`;
     ctx.lineWidth = 2;
     ctx.stroke();
     for (let i = 0; i < 10; i++) {
       const a = game.time * 1.5 + (i * Math.PI * 2) / 10;
       const r = HIGGS.radius * (0.92 + 0.05 * Math.sin(game.time * 3 + i));
-      ctx.fillStyle = '#90caf9';
+      ctx.fillStyle = SHIELD_COLORS[char.shieldType] || '#90caf9';
       ctx.beginPath();
       ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 3, 0, Math.PI * 2);
       ctx.fill();
@@ -2478,17 +2642,25 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.fillText(`HP ${Math.max(0, Math.ceil(p.hp))}/${d.maxHp}`, 26, 22);
 
+  // armor pool depletes before health
+  if (p.armorMax > 1) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(20, 40, 220, 6);
+    ctx.fillStyle = '#b0bec5';
+    ctx.fillRect(20, 40, 220 * Math.max(0, p.armorHP / p.armorMax), 6);
+  }
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(20, 44, 220, 8);
+  ctx.fillRect(20, 48, 220, 6);
   ctx.fillStyle = '#ffee58';
-  ctx.fillRect(20, 44, 220 * p.stamina, 8);
+  ctx.fillRect(20, 48, 220 * p.stamina, 6);
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(20, 58, 220, 10);
   ctx.fillStyle = game.higgs.charge >= 1 ? '#42a5f5' : '#1e5a8a';
   ctx.fillRect(20, 58, 220 * game.higgs.charge, 10);
-  ctx.fillStyle = '#bbdefb';
-  ctx.fillText(game.higgs.charge >= 1 ? 'HIGGS FIELD READY [E/Ⓨ]' : 'HIGGS CHARGING…', 20, 72);
+  ctx.fillStyle = SHIELD_COLORS[char.shieldType] || '#bbdefb';
+  const shieldName = char.shieldType.toUpperCase();
+  ctx.fillText(game.higgs.charge >= 1 ? `${shieldName} SHIELD READY [E]` + (char.shields.length > 1 ? ' · [C] swap' : '') : `${shieldName} SHIELD CHARGING…`, 20, 72);
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(20, 94, 220, 10);
@@ -2519,7 +2691,14 @@ function drawHUD() {
   ctx.fillText(`${favTxt}${ws.name}${tierTxt}  ${ammoTxt}`, view.w - 24, view.h - 70);
   ctx.font = 'bold 13px monospace';
   ctx.fillStyle = '#aed581';
-  ctx.fillText(`[G] GRENADE ×${char.grenades || 0}   [H] DYNAMITE ×${char.dynamite || 0}   [Q] RECALL PARTNER`, view.w - 24, view.h - 130);
+  const ns = game.nadeSel.toUpperCase();
+  ctx.fillText(`[G] ${ns} ×${char.nades[game.nadeSel] || 0} ([T] cycle)   [H] DYNAMITE ×${char.dynamite || 0}   [Q] RECALL`, view.w - 24, view.h - 130);
+  if (game.streak >= 5) {
+    ctx.font = 'bold 15px monospace';
+    ctx.fillStyle = '#ffd54f';
+    const next = game.streak < 25 ? 25 : game.streak < 50 ? 50 : 75;
+    ctx.fillText(`🔥 KILLSTREAK ${game.streak} → ${next}`, view.w - 24, view.h - 148);
+  }
   // active loot buffs
   let bx = view.w - 24;
   if (game.buffs.rage > 0) {
@@ -2806,6 +2985,11 @@ const SUPERBOSSES = [
   { name: 'SEWER KING', goons: ['spitter', 40] },
   { name: 'HEAD SURGEON', goons: ['crawler', 80] },
   { name: 'GENERAL ROT', goons: ['rogue', 30] },
+  { name: 'THE MANNEQUIN', goons: ['dog', 60] },
+  { name: 'THE CONDUCTOR', goons: ['runner', 90] },
+  { name: 'WARDEN MAXIMUS', goons: ['butcher', 22] },
+  { name: 'THE HARBORMASTER', goons: ['hazmat', 30] },
+  { name: 'THE LAST NEST', goons: ['exploder', 50] },
 ];
 
 function spawnHorde() {
@@ -2839,19 +3023,22 @@ function drawLevelSelect() {
   ctx.shadowBlur = 0;
 
   const n = LEVELS.length;
-  const gap = 14;
-  const cw = Math.min(230, (view.w - 70 - gap * (n - 1)) / n);
-  const chh = Math.min(260, view.h - 300);
-  const x0 = (view.w - (n * cw + (n - 1) * gap)) / 2;
-  const y0 = 86;
+  const cols = 5;
+  const rows = Math.ceil(n / cols);
+  const gap = 12;
+  const cw = Math.min(230, (view.w - 70 - gap * (cols - 1)) / cols);
+  const chh = Math.min(150, (view.h - 320 - gap * (rows - 1)) / rows);
+  const x0 = (view.w - (cols * cw + (cols - 1) * gap)) / 2;
+  const y0 = 76;
   LEVELS.forEach((lv, i) => {
     const unlocked = i <= (char.maxCampaign || 0);
-    const x = x0 + i * (cw + gap);
+    const x = x0 + (i % cols) * (cw + gap);
+    const yRow = y0 + Math.floor(i / cols) * (chh + gap);
     const idx = uiButtons.length;
     const focused = gamepad.connected && idx === gpFocus;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x, y0, cw, chh);
+    ctx.rect(x, yRow, cw, chh);
     ctx.clip();
     const art = getImage(lv.intro);
     if (art) {
@@ -2865,7 +3052,7 @@ function drawLevelSelect() {
     ctx.restore();
     ctx.strokeStyle = focused ? '#ffd54f' : unlocked ? '#546e7a' : '#2c343c';
     ctx.lineWidth = focused ? 3 : 1;
-    ctx.strokeRect(x, y0, cw, chh);
+    ctx.strokeRect(x, yRow, cw, chh);
     ctx.textAlign = 'center';
     ctx.font = 'bold 13px monospace';
     ctx.fillStyle = unlocked ? '#fff' : '#546e7a';
@@ -2875,7 +3062,7 @@ function drawLevelSelect() {
     ctx.font = '10px monospace';
     ctx.fillStyle = '#90a4ae';
     if (unlocked) ctx.fillText(`${lv.waves} waves · ${lv.bosses} boss${lv.bosses > 1 ? 'es' : ''} · 3 secrets`, x + cw / 2, y0 + chh - 28, cw - 10);
-    button(x, y0, cw, chh, () => {
+    button(x, yRow, cw, chh, () => {
       gameMode = 'campaign';
       char.campaignLevel = i;
       char.checkpoint = null;
@@ -2886,7 +3073,7 @@ function drawLevelSelect() {
 
   // row 1: survivor select + random deploy
   const bw = 350, bh2 = 44, bgap = 22;
-  const by = y0 + chh + 16;
+  const by = y0 + rows * chh + (rows - 1) * gap + 14;
   const rowBtn = (bx, w, fill, stroke, textColor, label, cb) => {
     const idx = uiButtons.length;
     const focused = gamepad.connected && idx === gpFocus;
@@ -3480,13 +3667,36 @@ function render(dt) {
     }
     ctx.restore();
   }
+  // smoke clouds
+  for (const sm of game.smokes) {
+    const left = Math.min(1, (sm.until - game.time) / 1.5);
+    for (let i = 0; i < 5; i++) {
+      const a = performance.now() / 2400 + i * 1.3;
+      ctx.fillStyle = `rgba(140,150,160,${0.16 * left})`;
+      ctx.beginPath();
+      ctx.arc(sm.x + Math.cos(a) * sm.r * 0.35, sm.y + Math.sin(a) * sm.r * 0.35, sm.r * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // decoy beacon
+  if (game.decoy) {
+    const blink = Math.floor(performance.now() / 200) % 2 === 0;
+    ctx.fillStyle = blink ? '#ffd54f' : '#8d6e2f';
+    ctx.beginPath();
+    ctx.arc(game.decoy.x, game.decoy.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,213,79,0.4)';
+    ctx.beginPath();
+    ctx.arc(game.decoy.x, game.decoy.y, 18 + Math.sin(performance.now() / 150) * 4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   // throwables in flight, blinking as the fuse burns down
   for (const tb of game.throwables) {
     ctx.save();
     ctx.translate(tb.x, tb.y);
     const blink = tb.fuse < 0.4 && Math.floor(performance.now() / 80) % 2 === 0;
-    if (tb.kind === 'nade') {
-      ctx.fillStyle = blink ? '#fff' : '#558b2f';
+    if (tb.kind === 'frag' || tb.kind === 'smoke' || tb.kind === 'decoy') {
+      ctx.fillStyle = blink ? '#fff' : tb.kind === 'frag' ? '#558b2f' : tb.kind === 'smoke' ? '#90a4ae' : '#ffd54f';
       ctx.beginPath();
       ctx.arc(0, 0, 6, 0, Math.PI * 2);
       ctx.fill();
