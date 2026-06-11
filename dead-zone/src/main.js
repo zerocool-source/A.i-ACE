@@ -107,6 +107,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'sewergrate', 'waterpool',
                     'killx3', 'bomber', 'flamecone', 'flamering', 'energyring',
                     'slashfx', 'roof1', 'roof2', 'roof3', 'roof4',
+                    'supplydrop', 'streakflame', 'bonusstar',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -790,7 +791,13 @@ function newGame() {
     shots: 0,
     hits: 0,
     superBoss: null,
+    fogs: Array.from({ length: 9 }, () => ({
+      x: Math.random() * world.w, y: Math.random() * world.h,
+      r: 180 + Math.random() * 220, vx: 6 + Math.random() * 10, a: 0.05 + Math.random() * 0.05,
+    })),
     bombers: [],
+    drops: [],
+    supplyT: 35 + Math.random() * 25,
     cutin: null,
     comboFired: {},
     chatScript: null,
@@ -2357,6 +2364,48 @@ function update(dt) {
   }
   g.strikes = g.strikes.filter((st) => st.t > 0);
 
+  // -- BONUS SUPPLY DROPS: a crate parachutes in near the fight
+  if (gameMode === 'campaign') {
+    g.supplyT = (g.supplyT ?? 40) - dt;
+    if (g.supplyT <= 0) {
+      g.supplyT = 45 + Math.random() * 30;
+      const a2 = Math.random() * Math.PI * 2;
+      const r2 = 260 + Math.random() * 320;
+      g.drops.push({
+        x: Math.max(60, Math.min(g.world.w - 60, p.x + Math.cos(a2) * r2)),
+        y: Math.max(60, Math.min(g.world.h - 60, p.y + Math.sin(a2) * r2)),
+        landT: 2.6, life: 30,
+      });
+      banner('SUPPLY DROP INBOUND', 'grab the crate — big bonus inside', '#ffd54f');
+      sfx.playFanfare();
+    }
+  }
+  for (const dr of g.drops || []) {
+    if (dr.landT > 0) { dr.landT -= dt; continue; }
+    dr.life -= dt;
+    if (Math.hypot(p.x - dr.x, p.y - dr.y) < 34) {
+      dr.life = 0;
+      const roll = Math.random();
+      if (roll < 0.4) {
+        const amt = 150 + Math.floor(Math.random() * 250);
+        char.scrap += amt;
+        g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: `★ BONUS +⚙${amt}`, color: '#ffd740', life: 1.6, vy: -45 });
+      } else if (roll < 0.7) {
+        for (const w2 of Object.keys(p.reserve)) if (p.reserve[w2] !== Infinity) p.reserve[w2] += Math.round(AMMO_RESERVE[w2] * 0.5);
+        g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: '★ AMMO RESUPPLY', color: '#80d8ff', life: 1.6, vy: -45 });
+      } else {
+        char.nades.frag += 2;
+        char.dynamite = (char.dynamite || 0) + 1;
+        g.buffs.rage = Math.max(g.buffs.rage, 6);
+        g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: '★ ORDNANCE + RAGE', color: '#ff7043', life: 1.6, vy: -45 });
+      }
+      banner('SUPPLY SECURED', 'the airforce still loves you', '#ffd54f');
+      sfx.playPurchase();
+      addShake(3);
+    }
+  }
+  g.drops = (g.drops || []).filter((dr) => dr.life > 0);
+
   // -- combo air support: the jet streaks past, bombs walking beneath it
   for (const bm of g.bombers || []) {
     bm.x += bm.vx * dt;
@@ -2479,7 +2528,8 @@ function update(dt) {
           sfx.playHitTick();
         }
         if (b.hit.size >= b.pierce) b.life = 0;
-        spawnBlood(b.x, b.y, 6, '#7b1d1d', dir);
+        spawnBlood(b.x, b.y, 11, '#7b1d1d', dir);
+        if (crit) spawnBlood(b.x, b.y, 8, '#b71c1c', dir); // arterial spray on crits
         if (!b.friendly) {
           // damage tiers paint the numbers: white -> yellow -> orange -> red
           const tierColor = crit ? '#ffd740' : dmg < 25 ? '#e8e8e8' : dmg < 60 ? '#ffee58' : dmg < 150 ? '#ff9100' : '#ff5252';
@@ -2605,7 +2655,7 @@ function update(dt) {
       g.comboFired = {};
     }
   }
-  for (const sb of screenBlood) sb.alpha -= dt * 0.12;
+  for (const sb of screenBlood) sb.alpha -= dt * 0.3;
   screenBlood = screenBlood.filter((sb) => sb.alpha > 0.02);
   for (const rl of radioLines) rl.t -= dt;
   radioLines = radioLines.filter((rl) => rl.t > 0);
@@ -2684,7 +2734,13 @@ function killZombie(z, dirAngle) {
   }
   // SYNTHETIK-style kill feedback
   sfx.playKillThud();
-  addShake(1.1);
+  addShake(2.2);
+  // kills right next to you can paint the camera lens (throttled)
+  if (Math.hypot(z.x - g.player.x, z.y - g.player.y) < 110 &&
+      g.time > (g.lensBloodAt || 0)) {
+    g.lensBloodAt = g.time + 2.5;
+    addScreenBlood(0.5);
+  }
   const bigKill = z.radius > 19 || z.super;
   // kill X grows with your combo — at high chains they get HUGE
   const xr = (bigKill ? 26 : 13) * (1 + Math.min(2.2, g.combo * 0.045));
@@ -2725,8 +2781,8 @@ function killZombie(z, dirAngle) {
     g.dmgNumbers.push({ x: z.x, y: z.y + 14, txt: `×${g.combo}`, color: cc, life: 0.7, vy: -34 });
   }
   if (bigKill) {
-    hitStopT = Math.max(hitStopT, 0.06);
-    addShake(4);
+    hitStopT = Math.max(hitStopT, 0.08);
+    addShake(7);
   }
   // killstreaks: build kills without your HEALTH being hit
   g.streak++;
@@ -2906,6 +2962,17 @@ function drawGround() {
     ctx.fillRect(li.x - li.r, li.y - li.r, li.r * 2, li.r * 2);
   }
   ctx.globalCompositeOperation = 'source-over';
+  // drifting smoke banks roll slowly across the ruins
+  for (const fg of g.fogs || []) {
+    fg.x += fg.vx * 0.016;
+    if (fg.x - fg.r > g.world.w) fg.x = -fg.r;
+    if (fg.x + fg.r < cam.x || fg.x - fg.r > cam.x + view.w || fg.y + fg.r < cam.y || fg.y - fg.r > cam.y + view.h) continue;
+    const fgrad = ctx.createRadialGradient(fg.x, fg.y, fg.r * 0.2, fg.x, fg.y, fg.r);
+    fgrad.addColorStop(0, `rgba(150,160,170,${fg.a})`);
+    fgrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = fgrad;
+    ctx.fillRect(fg.x - fg.r, fg.y - fg.r, fg.r * 2, fg.r * 2);
+  }
 }
 
 const CAR_COLORS = ['#4e4448', '#3e4a55', '#5a4a3a', '#46524a', '#52404f'];
@@ -3182,7 +3249,7 @@ function drawZombie(z) {
   }
   const { t: target } = zombieTarget(z);
   const a = Math.atan2(target.y - z.y, target.x - z.x);
-  const sprite = (z.goreSkin && SPRITES[z.type + '_gore']) || SPRITES[z.type];
+  const sprite = SPRITES[z.type]; // gore variants retired: all art is now true top-down
   if (sprite) {
     ctx.save();
     const rear = z.windup ? -0.3 * Math.sin((0.33 - z.windup) / 0.33 * Math.PI) : 0;
@@ -3556,6 +3623,14 @@ function drawBanners(dt) {
   ctx.translate(view.w / 2, view.h / 2 - 80);
   ctx.scale(scale, scale);
   ctx.globalAlpha = alpha;
+  const fiery = /KILLSTREAK|COMBO|RAMPAGE|MASSACRE|UNSTOPPABLE|GODLIKE|BOSS/.test(b.text);
+  if (fiery && SPRITES.streakflame) {
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.9;
+    ctx.translate(0, -14);
+    drawSpriteFit(SPRITES.streakflame, 620, 170);
+    ctx.restore();
+  }
   ctx.font = 'bold 58px monospace';
   ctx.lineWidth = 8;
   ctx.strokeStyle = 'rgba(0,0,0,0.9)';
@@ -4781,6 +4856,35 @@ function render(dt) {
     drawCorpse(co);
   }
   drawHiggs();
+  // supply crates: drifting down under canopy, then beckoning on the ground
+  for (const dr of game.drops || []) {
+    ctx.save();
+    ctx.translate(dr.x, dr.y);
+    if (dr.landT > 0) {
+      const k2 = dr.landT / 2.6;
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.ellipse(0, 12, 26 * (1 - k2 * 0.5), 12 * (1 - k2 * 0.5), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      const sc2 = 1 + k2 * 0.9;
+      if (SPRITES.supplydrop) drawSpriteFit(SPRITES.supplydrop, 86 * sc2, 86 * sc2);
+    } else {
+      const pulse2 = 1 + 0.08 * Math.sin(performance.now() / 200);
+      if (SPRITES.supplydrop) drawSpriteFit(SPRITES.supplydrop, 70 * pulse2, 70 * pulse2);
+      else {
+        ctx.fillStyle = '#5d4a26';
+        ctx.fillRect(-16, -12, 32, 24);
+      }
+      if (SPRITES.bonusstar) {
+        ctx.globalAlpha = 0.55 + 0.4 * Math.sin(performance.now() / 250);
+        drawSpriteFit(SPRITES.bonusstar, 30, 30);
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+  }
   drawCaches();
   drawScraps();
   for (const c of game.civilians) {
