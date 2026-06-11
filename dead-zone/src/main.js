@@ -104,7 +104,9 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'bus', 'rubble', 'dumpster', 'barricade',
                     'fountain', 'kiosk', 'traincar', 'watchtower', 'container',
                     'crane', 'helipad', 'acunit', 'mausoleum', 'tank', 'tent',
-                    'sewergrate', 'waterpool']) {
+                    'sewergrate', 'waterpool',
+                    'killx3', 'bomber', 'flamecone', 'flamering', 'energyring',
+                    'slashfx', 'roof1', 'roof2', 'roof3', 'roof4']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   spritesTotal++;
@@ -149,7 +151,23 @@ function animFrames(name) {
     cv.getContext('2d').drawImage(f, (W - f.width) / 2, (H - f.height) / 2);
     return cv;
   });
-  return (animCache[name] = { idle: pad[0], walk: pad[1], run: pad[2] || pad[1] });
+  // mirror each stride frame across the facing axis: instant opposite-leg
+  // poses, turning a 3-frame sheet into a true alternating walk cycle
+  const flip = (cv) => {
+    const m = document.createElement('canvas');
+    m.width = cv.width;
+    m.height = cv.height;
+    const mc = m.getContext('2d');
+    mc.translate(0, cv.height);
+    mc.scale(1, -1);
+    mc.drawImage(cv, 0, 0);
+    return m;
+  };
+  const runPad = pad[2] || pad[1];
+  return (animCache[name] = {
+    idle: pad[0], walk: pad[1], run: runPad,
+    walkB: flip(pad[1]), runB: flip(runPad),
+  });
 }
 
 const titleArt = new Image();
@@ -444,8 +462,8 @@ function placeProps(lv, world) {
     case 'city':
       edgeBlocks(8, 'building', 280, 180);
       midBlocks(5, 'building', 280, 180);
-      scatter(9, 64, 80, 32, 40, 'car');
-      scatter(3, 36, 48, 36, 48, 'crate', true);
+      scatter(6, 64, 80, 32, 40, 'car');
+      scatter(2, 36, 48, 36, 48, 'crate', true);
       scatter(1 / af, 140, 170, 140, 170, 'tent'); // abandoned triage post
       break;
     case 'graveyard':
@@ -624,6 +642,60 @@ const ALLY_DEFS = {
 };
 const SQUAD_JOIN = ['soldier', 'medic', 'commander', 'demo']; // index = level completed
 
+// opening squad-banter scripts — a short radio scene plays as each level begins
+const LEVEL_CHATS = {
+  city: [
+    ['partner', 'Streets are crawling. Watch the alleys, I\'ll watch your back.'],
+    ['hero', 'Three days since the convoys stopped. WE are the rescue now.'],
+    ['partner', 'Then let\'s make it count. On your lead.'],
+  ],
+  graveyard: [
+    ['partner', 'A graveyard. During a zombie apocalypse. Fantastic.'],
+    ['hero', 'Stay off the soft dirt. Some of these graves are... fresh.'],
+    ['partner', 'That one just MOVED. Tell me that one didn\'t just move.'],
+  ],
+  sewer: [
+    ['hero', 'Watch the waterline. The fast ones hunt in packs down here.'],
+    ['partner', 'If it ripples, I shoot it. If it splashes, I shoot it twice.'],
+    ['hero', 'And if the lights die — back to back, like we practiced.'],
+  ],
+  hospital: [
+    ['partner', 'St. Mercy. Patient zero checked in right here.'],
+    ['hero', 'Records are in the lab. Grab them and we burn our way out.'],
+    ['partner', 'ECHO-6 said don\'t read the names. I\'m reading the names.'],
+  ],
+  base: [
+    ['hero', 'Base Delta. The heart of the Dead Zone.'],
+    ['partner', 'The whole army couldn\'t hold this place. Good thing we\'re not the army.'],
+    ['hero', 'The nest can die. The files prove it. Let\'s go kill an idea.'],
+  ],
+  mall: [
+    ['partner', 'Five thousand shoppers sealed in on day one. Hear that muzak?'],
+    ['hero', 'Mall security is still broadcasting. That voice isn\'t human anymore.'],
+    ['partner', 'ATTENTION SHOPPERS: we\'re here to close the store. Permanently.'],
+  ],
+  subway: [
+    ['hero', 'The 3:14 never made its stop. Nine hundred souls still down here.'],
+    ['partner', 'They go quiet when a train horn sounds. All of them. At once.'],
+    ['hero', 'Then pray we don\'t hear a horn. Move.'],
+  ],
+  prison: [
+    ['partner', 'Blackgate. Three thousand inmates, zero parole.'],
+    ['hero', 'The warden welded solitary shut from the INSIDE. Think about that.'],
+    ['partner', 'I\'m trying very hard not to. Cell blocks first?'],
+  ],
+  docks: [
+    ['hero', 'The VERA brought the second outbreak in through this harbor.'],
+    ['partner', 'Manifest said machine parts. The crates were breathing, ECHO said.'],
+    ['hero', 'Burn the harbor. Leave nothing for the tide.'],
+  ],
+  rooftops: [
+    ['partner', 'Top of the world. The dead learned to climb for this view.'],
+    ['hero', 'The final nest is up here. After this... it\'s over.'],
+    ['partner', 'Whatever happens — it\'s been an honor, you glorious lunatic.'],
+  ],
+};
+
 function newGame() {
   const d = derived(char);
   const lv = level();
@@ -700,6 +772,11 @@ function newGame() {
     shots: 0,
     hits: 0,
     superBoss: null,
+    bombers: [],
+    cutin: null,
+    comboFired: {},
+    chatScript: null,
+    chatT: 0,
     survivalT: null, // wave-3 countdown
     survivalPool: 0, // how many of the 5,000 are still unspawned
     hordeEventAt: -1,
@@ -766,7 +843,7 @@ function makeAlly(type, world) {
     type, name: def.name,
     x: world.w / 2 + (Math.random() - 0.5) * 120,
     y: world.h / 2 + (Math.random() - 0.5) * 120,
-    hp: def.hp, maxHp: def.hp,
+    hp: Math.round(def.hp * gear), maxHp: Math.round(def.hp * gear),
     radius: 13,
     angle: 0,
     fireCooldown: 0,
@@ -827,6 +904,11 @@ function setupDrive() {
 
 function startLevel() {
   game = newGame();
+  // the opening scene: your squad talks through the level as you deploy
+  if (gameMode === 'campaign' && LEVEL_CHATS[level().key]) {
+    game.chatScript = [...LEVEL_CHATS[level().key]];
+    game.chatT = 2.5;
+  }
   if (gameMode === 'drive') setupDrive();
   decalCanvas = document.createElement('canvas');
   decalCanvas.width = Math.ceil(game.world.w * DECAL_SCALE);
@@ -1504,9 +1586,10 @@ function update(dt) {
           y: p.y + Math.sin(p.angle) * (p.radius + 10),
           vx: Math.cos(a) * ws.bulletSpeed,
           vy: Math.sin(a) * ws.bulletSpeed,
-          damage: ws.damage * squadDmgMult(), color: ws.color, life: ws.mortar ? (ws.rocket ? 1.4 : 0.85) : 1.2,
+          damage: ws.damage * squadDmgMult(), color: ws.color,
+          life: ws.flame ? 0.32 : ws.mortar ? (ws.rocket ? 1.4 : 0.85) : 1.2,
           pierce: ws.pierce ?? 1, hit: new Set(), friendly: false,
-          mortar: !!ws.mortar, rocket: !!ws.rocket,
+          mortar: !!ws.mortar, rocket: !!ws.rocket, flame: !!ws.flame,
         });
       }
       if (p.mags[p.weapon] === 0 && p.reserve[p.weapon] > 0) {
@@ -1627,10 +1710,16 @@ function update(dt) {
       const dist = Math.hypot(z.x - p.x, z.y - p.y);
       if (dist >= HIGGS.radius + z.radius) continue;
       if (char.shieldType === 'flame') {
-        // flame core: everything inside burns
+        // flame core: everything inside catches fire and burns down
         z.hp -= 70 * dt;
+        z.burnUntil = Math.max(z.burnUntil || 0, g.time + 1.2);
         if (Math.random() < dt * 6) spawnBlood(z.x, z.y, 2, '#ff7043');
         if (z.hp <= 0) killZombie(z, Math.atan2(z.y - p.y, z.x - p.x));
+      } else if (char.shieldType === 'blue') {
+        // blue core: a physical wall — the horde gets shoved off you
+        const push = 260 * dt / Math.max(dist, 20);
+        z.x += (z.x - p.x) * push;
+        z.y += (z.y - p.y) * push;
       } else if (char.shieldType === 'health') {
         // health core: constant repulsion
         const push = 170 * dt / Math.max(dist, 20);
@@ -1813,6 +1902,18 @@ function update(dt) {
     }
     z.wobble += dt * 5;
     z.flash = Math.max(0, z.flash - dt);
+    // on fire: damage over time + ember spray until the burn runs out
+    if (z.burnUntil && g.time < z.burnUntil && z.hp > 0) {
+      z.hp -= 32 * dt;
+      if (Math.random() < dt * 9) {
+        g.particles.push({
+          x: z.x + (Math.random() - 0.5) * z.radius * 2, y: z.y + (Math.random() - 0.5) * z.radius * 2,
+          vx: (Math.random() - 0.5) * 60, vy: -60 - Math.random() * 60,
+          life: 0.3 + Math.random() * 0.25, color: Math.random() < 0.5 ? '#ffab40' : '#ff7043', size: 3,
+        });
+      }
+      if (z.hp <= 0) { killZombie(z, Math.random() * 6.28); continue; }
+    }
     const holdPosition = z.ranged && distT < z.ranged.range * 0.85;
     if (z.human) {
       // rogue military: hold ~380px, strafe, fall back when pressed
@@ -2222,6 +2323,19 @@ function update(dt) {
   }
   g.strikes = g.strikes.filter((st) => st.t > 0);
 
+  // -- combo air support: the jet streaks past, bombs walking beneath it
+  for (const bm of g.bombers || []) {
+    bm.x += bm.vx * dt;
+    bm.life -= dt;
+    bm.dropT -= dt;
+    if (bm.dropT <= 0 && bm.drops > 0) {
+      bm.drops--;
+      bm.dropT = 0.16;
+      g.strikes.push({ x: bm.x + 60, y: bm.y + 40 + (Math.random() - 0.5) * 120, t: 0.35 });
+    }
+  }
+  g.bombers = (g.bombers || []).filter((bm) => bm.life > 0);
+
   // -- locked doors: pay scrap to open, loot waits inside
   for (let i = g.props.length - 1; i >= 0; i--) {
     const pr = g.props[i];
@@ -2313,6 +2427,7 @@ function update(dt) {
         const dmg = Math.round(b.damage * (crit ? 2 : 1) * rage);
         z.hp -= dmg;
         z.flash = 0.08;
+        if (b.flame) z.burnUntil = Math.max(z.burnUntil || 0, g.time + 2); // catches fire
         b.hit.add(z);
         if (!b.friendly) g.hits++;
         // white impact sparks, SYNTHETIK flash
@@ -2432,6 +2547,18 @@ function update(dt) {
   g.dmgNumbers = g.dmgNumbers.filter((n) => n.life > 0);
   for (const km of g.killMarks) km.t -= dt;
   g.killMarks = g.killMarks.filter((km) => km.t > 0);
+  // old blood and scorch fades away so long fights don't drown the map
+  g.decalFadeT = (g.decalFadeT ?? 1.5) - dt;
+  if (g.decalFadeT <= 0) {
+    g.decalFadeT = 1.5;
+    decalCtx.save();
+    decalCtx.setTransform(1, 0, 0, 1, 0, 0);
+    decalCtx.globalCompositeOperation = 'destination-out';
+    decalCtx.globalAlpha = 0.045;
+    decalCtx.fillStyle = '#000';
+    decalCtx.fillRect(0, 0, decalCanvas.width, decalCanvas.height);
+    decalCtx.restore();
+  }
   if (g.combo > 0) {
     g.comboT -= dt;
     if (g.comboT <= 0) {
@@ -2441,12 +2568,23 @@ function update(dt) {
         g.dmgNumbers.push({ x: p.x, y: p.y - 30, txt: `COMBO ×${g.combo} BANKED +⚙${bonus}`, color: '#ffd740', life: 1.3, vy: -40 });
       }
       g.combo = 0;
+      g.comboFired = {};
     }
   }
   for (const sb of screenBlood) sb.alpha -= dt * 0.12;
   screenBlood = screenBlood.filter((sb) => sb.alpha > 0.02);
   for (const rl of radioLines) rl.t -= dt;
   radioLines = radioLines.filter((rl) => rl.t > 0);
+  // opening level banter: hero and partner talk the situation through
+  if (g.chatScript && g.chatScript.length && g.time >= g.chatT) {
+    const [who, line] = g.chatScript.shift();
+    const hname = heroById(char.heroId).name.split(' ')[0];
+    const pname = char.partnerId ? heroById(char.partnerId).name.split(' ')[0]
+      : (g.allies[0] ? g.allies[0].name : 'ECHO-6');
+    const nm = who === 'hero' ? hname : pname;
+    radio(nm, `${nm}: "${line}"`, who === 'hero' ? '#80cbc4' : '#b39ddb');
+    g.chatT = g.time + 4.4;
+  }
 
   p.hurtFlash = Math.max(0, p.hurtFlash - dt);
 
@@ -2517,6 +2655,35 @@ function killZombie(z, dirAngle) {
   // kill X grows with your combo — at high chains they get HUGE
   const xr = (bigKill ? 26 : 13) * (1 + Math.min(2.2, g.combo * 0.045));
   g.killMarks.push({ x: z.x, y: z.y, t: 0.65, big: bigKill, r: Math.max(24, xr), rot: (Math.random() - 0.5) * 0.7 });
+  // deep combos stamp extra X's around the kill — the screen reads CARNAGE
+  if (g.combo >= 10) {
+    const extra = Math.min(3, 1 + ((g.combo / 15) | 0));
+    for (let xi = 0; xi < extra; xi++) {
+      g.killMarks.push({
+        x: z.x + (Math.random() - 0.5) * 70, y: z.y + (Math.random() - 0.5) * 70,
+        t: 0.45 + Math.random() * 0.3, big: false,
+        r: 12 + Math.random() * 14, rot: (Math.random() - 0.5) * 1.2,
+      });
+    }
+  }
+  g.comboFired = g.comboFired || {};
+  // KILL MODE: a hero cut-in slashes across the screen
+  if (g.combo >= 30 && !g.comboFired[30]) {
+    g.comboFired[30] = true;
+    g.cutin = { t: 1.7, hero: char.heroId };
+    bark('KILL MODE!');
+    sfx.playFanfare();
+    addShake(10);
+  }
+  // combo 40: attack jet flyover carpets the area ahead of you
+  if (g.combo >= 40 && !g.comboFired[40]) {
+    g.comboFired[40] = true;
+    banner('COMBO ×40', 'AIR SUPPORT ON STATION', '#ffd740');
+    g.bombers.push({
+      x: g.player.x - 900, y: g.player.y - 110 + (Math.random() - 0.5) * 160,
+      vx: 950, dropT: 0.3, drops: 9, life: 2.4,
+    });
+  }
   // the combo number itself pops at the kill site
   if (g.combo >= 2) {
     // rainbow chain numbers past 25
@@ -2667,7 +2834,7 @@ function drawGround() {
   const ground = getImage(level().ground);
   const tile = 256;
   if (ground) {
-    ctx.globalAlpha = 0.5;
+    ctx.globalAlpha = 0.42;
     const x0 = Math.floor(cam.x / tile) * tile;
     const y0 = Math.floor(cam.y / tile) * tile;
     for (let x = x0; x < cam.x + view.w; x += tile)
@@ -2779,7 +2946,15 @@ function drawProps() {
       ctx.strokeStyle = edge;
       ctx.lineWidth = 3;
       ctx.strokeRect(pr.x + 1.5, pr.y + 1.5, pr.w - 3, pr.h - 3);
-      if (pr.kind === 'building') {
+      const roofSp = pr.kind === 'building' ? SPRITES['roof' + (1 + (Math.floor(pr.seed * 4) % 4))] : null;
+      if (roofSp) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(pr.x + 1.5, pr.y + 1.5, pr.w - 3, pr.h - 3);
+        ctx.clip();
+        ctx.drawImage(roofSp, pr.x, pr.y, pr.w, pr.h);
+        ctx.restore();
+      } else if (pr.kind === 'building') {
         // rooftop window/vent grid, a few windows still lit
         for (let wx = pr.x + 14; wx < pr.x + pr.w - 22; wx += 26) {
           for (let wy = pr.y + 14; wy < pr.y + pr.h - 22; wy += 26) {
@@ -2996,6 +3171,12 @@ function drawZombie(z) {
     ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (z.burnUntil && game.time < z.burnUntil && SPRITES.fire) {
+    const fl = 0.85 + 0.3 * Math.sin(performance.now() / 55 + z.wobble * 9);
+    ctx.globalAlpha = 0.85;
+    drawSpriteFit(SPRITES.fire, z.radius * 2.6 * fl, z.radius * 2.6 * fl);
+    ctx.globalAlpha = 1;
+  }
   if (z.flash > 0) {
     ctx.fillStyle = `rgba(255,255,255,${z.flash * 7})`;
     ctx.beginPath();
@@ -3077,7 +3258,7 @@ function drawAlly(a) {
   a._lastWP = a.walkPhase || 0;
   // ally stride: walkPhase is distance*0.05, so /1.5 ≈ one frame per 30px
   const sprite = aAf
-    ? (aMoving && Math.floor((a.walkPhase || 0) / 1.5) % 2 === 1 ? aAf.walk : aAf.idle)
+    ? (aMoving ? [aAf.walk, aAf.idle, aAf.walkB, aAf.idle][Math.floor((a.walkPhase || 0) / 1.5) % 4] : aAf.idle)
     : SPRITES[aBase];
   if (sprite) drawSprite(sprite, a.radius * 3.4);
   else {
@@ -3155,14 +3336,14 @@ function drawPlayer() {
   const spriteName = heroById(char.heroId).sprite;
   const spd2 = Math.hypot(p.vx, p.vy);
   const af = animFrames(spriteName);
-  // 3-state sheet: idle -> [base,walk] cycle -> [walk,run] sprint cycle.
+  // 4-pose alternating-leg cycle (left stride / pass / right stride / pass);
   // every frame is the same padded canvas size, so the body never jitters
   let sprite = af ? af.idle : SPRITES[spriteName];
   if (spd2 > 40 && af) {
-    // one stride per ~30px travelled — correct cadence at every speed
-    const odd = Math.floor((p.animDist || 0) / 30) % 2 === 1;
-    if (spd2 > 300) sprite = odd ? af.run : af.walk;
-    else sprite = odd ? af.walk : af.idle;
+    // one pose per ~22px travelled — correct cadence at every speed
+    const ph = Math.floor((p.animDist || 0) / 22) % 4;
+    if (spd2 > 300) sprite = [af.walk, af.run, af.walkB, af.runB][ph];
+    else sprite = [af.walk, af.idle, af.walkB, af.idle][ph];
   }
   sprite = sprite || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
   if (sprite) {
@@ -3176,7 +3357,14 @@ function drawPlayer() {
     ctx.fillRect(p.radius - 4, -3, 18, 6);
   }
   if (p.muzzleFlash > 0) {
-    if (SPRITES.muzzle) {
+    if (p.weapon === 'flamer' && SPRITES.flamecone) {
+      const ff = 0.9 + 0.25 * Math.sin(performance.now() / 35);
+      ctx.save();
+      ctx.translate(p.radius + 64, 0);
+      ctx.globalAlpha = 0.92;
+      drawSpriteFit(SPRITES.flamecone, 120 * ff, 64 * ff);
+      ctx.restore();
+    } else if (SPRITES.muzzle) {
       ctx.save();
       ctx.translate(p.radius + 24, 0);
       drawSpriteFit(SPRITES.muzzle, 34, 24);
@@ -3210,6 +3398,16 @@ function drawHiggs() {
     ctx.strokeStyle = `rgba(${rgb},0.75)`;
     ctx.lineWidth = 2;
     ctx.stroke();
+    const ringSp = char.shieldType === 'flame' ? SPRITES.flamering
+      : char.shieldType === 'blue' ? SPRITES.energyring : null;
+    if (ringSp) {
+      ctx.save();
+      ctx.rotate(game.time * (char.shieldType === 'flame' ? 1.1 : -0.7));
+      ctx.globalAlpha = 0.85;
+      drawSpriteFit(ringSp, HIGGS.radius * 2.2, HIGGS.radius * 2.2);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
     for (let i = 0; i < 10; i++) {
       const a = game.time * 1.5 + (i * Math.PI * 2) / 10;
       const r = HIGGS.radius * (0.92 + 0.05 * Math.sin(game.time * 3 + i));
@@ -3631,6 +3829,20 @@ function drawCharSheet() {
   ctx.fillText(`XP ${char.xp}/${xpForLevel(char.level)}   SCRAP ${char.scrap}   KILLS ${char.totalKills}`, x + 24, y + 52);
   ctx.fillStyle = char.unspent > 0 ? '#ffd54f' : '#616161';
   ctx.fillText(`UNSPENT POINTS: ${char.unspent}`, x + 24, y + 74);
+  // hero portrait anchors the sheet
+  const cport = getImage(`portraits/${char.heroId}.png`);
+  if (cport) {
+    const ps3 = 124;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + w - ps3 - 22, y + 18, ps3, ps3);
+    ctx.clip();
+    ctx.drawImage(cport, x + w - ps3 - 22, y + 18, ps3, ps3);
+    ctx.restore();
+    ctx.strokeStyle = '#ce93d8';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + w - ps3 - 22, y + 18, ps3, ps3);
+  }
 
   let yy = y + 104;
   for (const key of Object.keys(ATTRS)) {
@@ -3681,6 +3893,8 @@ function drawCharSheet() {
   const shieldsTxt = char.shields.map((sh) => sh.toUpperCase()).join(' / ');
   ctx.fillText(`SHIELD CORES: ${shieldsTxt} (active: ${char.shieldType.toUpperCase()}) · DASH [SPACE] · KILLSTREAKS 25/50/75`, x + 24, yy + 46);
   ctx.fillText(`THROWABLES: FRAG ×${char.nades.frag} · SMOKE ×${char.nades.smoke} · DECOY ×${char.nades.decoy} · DYNAMITE ×${char.dynamite}`, x + 24, yy + 62);
+  ctx.fillStyle = '#a5d6a7';
+  ctx.fillText(`HEALTH POINTS: every character level grants +5 max HP (LV ${char.level} = +${(char.level - 1) * 5})`, x + 24, yy + 78);
   ctx.fillStyle = '#9e9e9e';
   ctx.fillText('[TAB/Ⓑ] close', x + 24, y + h - 28);
 }
@@ -4717,11 +4931,37 @@ function render(dt) {
     ctx.fillRect(pa.x - pa.size / 2, pa.y - pa.size / 2, pa.size, pa.size);
   }
   ctx.globalAlpha = 1;
+  // combo air support streaking overhead
+  for (const bm of game.bombers || []) {
+    ctx.save();
+    ctx.translate(bm.x, bm.y);
+    if (SPRITES.bomber) {
+      ctx.save();
+      ctx.translate(26, 84);
+      ctx.rotate(Math.PI / 2);
+      ctx.globalAlpha = 0.3;
+      ctx.filter = 'brightness(0)';
+      drawSpriteFit(SPRITES.bomber, 150, 150);
+      ctx.filter = 'none';
+      ctx.restore();
+      ctx.globalAlpha = 1;
+      ctx.rotate(Math.PI / 2); // nose-up art, flying east
+      drawSpriteFit(SPRITES.bomber, 150, 150);
+    } else {
+      ctx.fillStyle = '#37474f';
+      ctx.beginPath();
+      ctx.moveTo(60, 0);
+      ctx.lineTo(-40, -34);
+      ctx.lineTo(-40, 34);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
   // red kill X's, SYNTHETIK style
   for (const km of game.killMarks) {
     const t = km.t / 0.65;
     const r = (km.r || (km.big ? 26 : 13)) * (1.7 - t * 0.7);
-    const xSprite = SPRITES.killx2 || SPRITES.killx;
+    const xSprite = SPRITES.killx3 || SPRITES.killx2 || SPRITES.killx;
     if (xSprite) {
       ctx.save();
       ctx.translate(km.x, km.y);
@@ -4804,6 +5044,46 @@ function render(dt) {
   }
   drawScreenBlood();
   drawHUD();
+  // KILL MODE cut-in: the hero's portrait rides a slash streak across screen
+  if (game.cutin) {
+    const ci = game.cutin;
+    ci.t -= dt || 0.016;
+    if (ci.t <= 0) {
+      game.cutin = null;
+    } else {
+      const k = 1 - ci.t / 1.7;
+      const sx = view.w * (-0.35 + k * 1.7);
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, ci.t * 3) * 0.95;
+      if (SPRITES.slashfx) {
+        ctx.save();
+        ctx.translate(sx, view.h * 0.4);
+        drawSpriteFit(SPRITES.slashfx, view.w * 0.95, view.h * 0.55);
+        ctx.restore();
+      }
+      const port = getImage(`portraits/${ci.hero}.png`);
+      if (port) {
+        const ps2 = view.h * 0.44;
+        ctx.save();
+        ctx.translate(sx, view.h * 0.4);
+        ctx.rotate(-0.06);
+        ctx.drawImage(port, -ps2 / 2, -ps2 / 2, ps2, ps2);
+        ctx.strokeStyle = '#ff1744';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(-ps2 / 2, -ps2 / 2, ps2, ps2);
+        ctx.restore();
+      }
+      ctx.font = `bold ${Math.round(view.h / 9)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 9;
+      ctx.strokeStyle = '#000';
+      ctx.strokeText('KILL MODE', view.w / 2, view.h * 0.76);
+      ctx.fillStyle = '#ff1744';
+      ctx.fillText('KILL MODE', view.w / 2, view.h * 0.76);
+      ctx.restore();
+    }
+  }
   drawBanners(dt);
   if (charSheetOpen) {
     uiButtons = [];

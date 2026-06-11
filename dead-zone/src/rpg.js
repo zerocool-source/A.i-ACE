@@ -69,7 +69,7 @@ export function derived(char) {
     damageMult: 1 + a.str * 0.04,
     moveMult: 1 + a.agi * 0.02,
     reloadMult: Math.max(0.4, 1 - a.agi * 0.015),
-    maxHp: 100 + a.vit * 10,
+    maxHp: 100 + a.vit * 10 + (char.level - 1) * 5, // +5 HP every level
     regen: a.vit * 0.2,
     critChance: 0.05 + a.tech * 0.01,
     higgsCooldown: Math.max(5, 15 * (1 - a.tech * 0.03) - char.higgsBatteries * 2),
@@ -106,7 +106,8 @@ export function shopCatalog(char, playerHp) {
     if (char.ownedWeapons.includes(w)) continue;
     const descs = {
       magnum: 'Hand cannon — pierces 3 zombies per shot [5]',
-      minigun: 'Bullet hose — 120-round drum [6]',
+      minigun: 'Six barrels of NO — 120-round drum [6]',
+      flamer: 'Sets everything on fire. EVERYTHING. [V]',
       flak: 'Wall of shrapnel — 12 pellets per blast [7]',
       railgun: 'Pierces an entire horde in a straight line [8]',
       sniper: 'One shot, five kills, across the whole map [9]',

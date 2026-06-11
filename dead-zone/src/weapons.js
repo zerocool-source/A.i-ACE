@@ -28,7 +28,7 @@ export const WEAPONS = {
     bulletSpeed: 1500, color: '#ff8a80', pierce: 3, price: 400,
   },
   minigun: {
-    name: 'MINIGUN', key: '6', auto: true, damage: 15, magSize: 120,
+    name: 'GATLING GUN', key: '6', auto: true, damage: 15, magSize: 120,
     fireInterval: 0.045, reloadTime: 3.2, spread: 0.13, pellets: 1,
     bulletSpeed: 1100, color: '#b9f6ca', pierce: 1, price: 900,
   },
@@ -62,13 +62,19 @@ export const WEAPONS = {
     fireInterval: 1.0, reloadTime: 2.8, spread: 0.01, pellets: 1,
     bulletSpeed: 720, color: '#ff5252', pierce: 1, price: 2200, mortar: true, rocket: true,
   },
+  flamer: {
+    // short-range fire hose: every hit sets the target burning for 2s
+    name: 'FLAMETHROWER', key: 'v', auto: true, damage: 9, magSize: 100,
+    fireInterval: 0.04, reloadTime: 2.5, spread: 0.17, pellets: 1,
+    bulletSpeed: 520, color: '#ffab40', pierce: 2, price: 1100, flame: true,
+  },
 };
 
-export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun', 'sniper', 'mortar', 'glauncher', 'mlauncher'];
+export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flamer', 'flak', 'railgun', 'sniper', 'mortar', 'glauncher', 'mlauncher'];
 
 // reserve ammo carried per weapon at level start; the pistol never runs dry
 export const AMMO_RESERVE = {
   pistol: Infinity, rifle: 150, shotgun: 42, smg: 210, magnum: 36,
-  minigun: 480, flak: 56, railgun: 20, sniper: 25, mortar: 18, glauncher: 36, mlauncher: 27,
+  minigun: 480, flamer: 400, flak: 56, railgun: 20, sniper: 25, mortar: 18, glauncher: 36, mlauncher: 27,
 };
 export const STARTING_WEAPONS = ['pistol', 'rifle', 'shotgun', 'smg'];
