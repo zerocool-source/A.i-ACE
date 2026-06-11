@@ -87,7 +87,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder',
                     'crawler', 'screamer', 'rogue', 'cache', 'wreck', 'statue',
                     'granny', 'cop', 'hazmat', 'butcher', 'dog', 'stalker',
-                    'drive_sports', 'drive_taxi', 'drive_police']) {
+                    'drive_sports', 'drive_taxi', 'drive_police', 'drive_armored']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -531,8 +531,8 @@ function newGame() {
       weapon: 'pistol',
       mags: Object.fromEntries(WEAPON_ORDER.map((w) => [w, weaponStats(char, w).magSize])),
       reserve: { ...AMMO_RESERVE },
-      armorHP: derived(char).armor * 25,
-      armorMax: Math.max(1, derived(char).armor * 25),
+      armorHP: derived(char).armor * 40,
+      armorMax: Math.max(1, derived(char).armor * 40),
       fireCooldown: 0,
       reloading: 0,
       muzzleFlash: 0,
@@ -564,6 +564,9 @@ function newGame() {
     frenzyUntil: 0,
     throwables: [],
     strikes: [],
+    lastStandUsed: false,
+    meleeGraceUntil: 0,
+    driveStart: 0,
     driveCars: [],
     driveTimer: 8 + Math.random() * 10,
     smokes: [],
@@ -650,8 +653,33 @@ function makeAlly(type, world) {
   };
 }
 
+function setupDrive() {
+  const g = game;
+  g.world = { w: 1100, h: 16000 };
+  g.allies = [];
+  g.civilians = [];
+  g.caches = [];
+  g.pickups = [];
+  // roadside blocks + wreck obstacles down the strip
+  g.props = [];
+  for (let y = 200; y < g.world.h - 400; y += 260 + Math.random() * 200) {
+    g.props.push({ x: 10, y, w: 130 + Math.random() * 60, h: 180, kind: 'building', low: false, seed: Math.random() });
+    g.props.push({ x: g.world.w - 200, y: y + 130, w: 130 + Math.random() * 60, h: 180, kind: 'building', low: false, seed: Math.random() });
+    if (Math.random() < 0.75) {
+      g.props.push({ x: 260 + Math.random() * 560, y: y + Math.random() * 160, w: 78, h: 38, kind: 'car', low: false, seed: Math.random() });
+    }
+    if (Math.random() < 0.4) {
+      g.pickups.push({ x: 280 + Math.random() * 540, y: y + 60, type: Math.random() < 0.6 ? 'ammo' : 'medkit', t: 9999, radius: 10 });
+    }
+  }
+  g.player.x = g.world.w / 2;
+  g.player.y = g.world.h - 320;
+  g.driveStart = g.player.y;
+}
+
 function startLevel() {
   game = newGame();
+  if (gameMode === 'drive') setupDrive();
   decalCanvas = document.createElement('canvas');
   decalCanvas.width = Math.ceil(game.world.w * DECAL_SCALE);
   decalCanvas.height = Math.ceil(game.world.h * DECAL_SCALE);
@@ -680,7 +708,9 @@ function startLevel() {
   if (gameMode !== 'campaign') {
     hordeRound = 1;
     game.wave = 1;
-    if (gameMode === 'horde') {
+    if (gameMode === 'drive') {
+      banner('DRIVE', 'A/D steer · SPACE nitro · mouse shoots · RAM EVERYTHING', '#ffd54f');
+    } else if (gameMode === 'horde') {
       spawnHorde();
       banner('HORDE MODE', '200 of them. All of them want YOU.', '#ff1744');
     } else if (gameMode === 'extreme') {
@@ -797,6 +827,7 @@ function spawnLevelZombie(type) {
       z.y = Math.max(30, Math.min(g.world.h - 30, pr.y + pr.h / 2 + (Math.random() - 0.5) * pr.h));
     }
   }
+  if (type !== 'boss') z.radius = Math.max(12, Math.min(17, z.radius)); // player-scale hitboxes
   z.hp = z.maxHp = Math.round(z.hp * lv.hpMult);
   z.speed *= lv.speedMult;
   z.damage = Math.round(z.damage * (1 + char.campaignLevel * 0.25));
@@ -1027,6 +1058,7 @@ function update(dt) {
   const d = derived(char);
   g.time += dt;
 
+  const driving = gameMode === 'drive';
   // -- player movement (keyboard + left stick)
   let dx = 0, dy = 0;
   if (input.keys.has('w')) dy -= 1;
@@ -1041,6 +1073,54 @@ function update(dt) {
   else p.stamina = Math.min(1, p.stamina + dt / 4);
   const spd = p.speed * d.moveMult * (sprinting ? p.sprintMult : 1);
 
+  if (driving) {
+    // the car drives itself forward — you steer and floor the nitro
+    p.dashCooldown = Math.max(0, p.dashCooldown - dt);
+    let nitro = 1;
+    if ((wasPressed(' ') || gpPressed('b')) && p.dashCooldown <= 0) {
+      p.dashCooldown = 3;
+      p.dashT = 1.0;
+      sfx.playHiggsWhomp();
+    }
+    if (p.dashT > 0) { p.dashT -= dt; nitro = 1.8; }
+    p.vy = -560 * nitro;
+    const steer = (input.keys.has('a') ? -1 : 0) + (input.keys.has('d') ? 1 : 0) + gamepad.moveX;
+    p.vx += (steer * 460 - p.vx) * (1 - Math.exp(-10 * dt));
+    const beforeX = p.x, beforeY = p.y;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.x = Math.max(190, Math.min(g.world.w - 190, p.x));
+    p.y = Math.max(60, Math.min(g.world.h - 60, p.y));
+    collideProps(p);
+    // crashing into wrecks hurts
+    if (Math.hypot(p.x - (beforeX + p.vx * dt), p.y - (beforeY + p.vy * dt)) > 6 && g.time > (p.crashCool || 0)) {
+      p.crashCool = g.time + 0.7;
+      damagePlayer(12);
+      sfx.playSquelch();
+    }
+    p.angle = Math.atan2(input.mouse.y + cam.y - p.y, input.mouse.x + cam.x - p.x);
+    // endless oncoming dead
+    g.spawnTimer -= dt;
+    if (g.spawnTimer <= 0) {
+      g.spawnTimer = 0.34;
+      if (g.zombies.length < 120) {
+        const z = spawnLevelZombie(Math.random() < 0.75 ? 'walker' : 'runner');
+        z.x = 240 + Math.random() * (g.world.w - 480);
+        z.y = p.y - 720 - Math.random() * 500;
+        g.zombies.push(z);
+      }
+    }
+    // stage goal
+    const dist = Math.round((g.driveStart - p.y) / 10);
+    if (p.y <= 400) {
+      overTitle = `STAGE REACHED — ${dist}m · +800 SCRAP`;
+      overDied = false;
+      char.scrap += 800;
+      saveCharacter(char);
+      state = 'gameover';
+      sfx.playFanfare();
+    }
+  } else {
   // dodge dash: SPACE / Ⓑ — burst of speed with brief invulnerability
   p.dashCooldown = Math.max(0, p.dashCooldown - dt);
   if ((wasPressed(' ') || gpPressed('b')) && !charSheetOpen && p.dashCooldown <= 0 && p.stamina > 0.2) {
@@ -1079,6 +1159,7 @@ function update(dt) {
   p.y = Math.max(p.radius, Math.min(g.world.h - p.radius, p.y));
   collideProps(p);
 
+  }
   // walk cycle + footstep dust, driven by real velocity
   const speedMag = Math.hypot(p.vx, p.vy);
   p.walkPhase += speedMag * dt * 0.05;
@@ -1220,6 +1301,23 @@ function update(dt) {
   }
   g.throwables = g.throwables.filter((tb) => tb.fuse > 0);
 
+  // -- airstrike beacon [X]
+  if (wasPressed('x') && (char.airstrikes || 0) > 0) {
+    char.airstrikes--;
+    saveCharacter(char);
+    banner('AIRSTRIKE INBOUND', 'danger close', '#ffd54f');
+    sfx.playHiggsWhomp();
+    const targets = g.zombies.filter((zz) => zz.hp > 0 && Math.hypot(zz.x - p.x, zz.y - p.y) < 800);
+    for (let i = 0; i < 7; i++) {
+      const tz = targets[Math.floor(Math.random() * Math.max(1, targets.length))];
+      g.strikes.push({
+        x: tz ? tz.x : p.x + (Math.random() - 0.5) * 600,
+        y: tz ? tz.y : p.y + (Math.random() - 0.5) * 600,
+        t: 0.5 + i * 0.28,
+      });
+    }
+  }
+
   // -- call the sidekick back to your side
   if (wasPressed('q') || gpPressed('back')) {
     for (const a of g.allies) {
@@ -1246,6 +1344,8 @@ function update(dt) {
     h.activeUntil = g.time + HIGGS.slowDuration;
     h.ringT = 0;
     sfx.playHiggsWhomp();
+    // GREEN core: full invincibility while the bubble holds
+    if (char.shieldType === 'health') p.invulnUntil = Math.max(p.invulnUntil, h.activeUntil);
     for (const z of g.zombies) {
       const dist = Math.hypot(z.x - p.x, z.y - p.y);
       if (dist < HIGGS.radius + z.radius) {
@@ -1296,7 +1396,9 @@ function update(dt) {
       g.zombies.push(z);
     }
   }
-  if (gameMode === 'horde' || gameMode === 'extreme') {
+  if (gameMode === 'drive') {
+    // handled in the driving block above
+  } else if (gameMode === 'horde' || gameMode === 'extreme') {
     if (!g.zombies.length) {
       hordeRound++;
       spawnHorde();
@@ -1337,6 +1439,9 @@ function update(dt) {
   } else if (g.survivalT != null) {
     // the 3-minute stand: a 5,000-strong flood, capped live for performance
     g.survivalT -= dt;
+    if (g.survivalT < 120 && !g.sv120) { g.sv120 = true; radio('echo', 'ECHO-6: "Two minutes. The flood is THICKENING. Hold."', '#80cbc4'); }
+    if (g.survivalT < 60 && !g.sv60) { g.sv60 = true; radio('echo', 'ECHO-6: "One minute! Whatever you\'re doing — KEEP DOING IT."', '#80cbc4'); }
+    if (g.survivalT < 15 && !g.sv15) { g.sv15 = true; radio('echo', 'ECHO-6: "FIFTEEN SECONDS. SOMETHING BIG IS MOVING UNDER THEM—"', '#ff8a80'); }
     let burst = 0;
     while (g.survivalPool > 0 && g.zombies.length < 320 && burst < 8) {
       g.zombies.push(spawnLevelZombie(randomZombieType(char.campaignLevel)));
@@ -1490,9 +1595,18 @@ function update(dt) {
     z.attackCooldown -= dt;
     if (z.attackCooldown <= 0) {
       if (distT < z.radius + p.radius + 4) {
-        // the player is the prey
         z.attackCooldown = 0.8;
-        damagePlayer(z.damage);
+        if (gameMode === 'drive') {
+          // RAM. the car wins
+          z.hp = 0;
+          killZombie(z, Math.atan2(z.y - p.y, z.x - p.x));
+          addScreenBlood(0.5);
+          if (z.radius > 17) damagePlayer(8); // only the big ones dent you
+        } else if (g.time >= g.meleeGraceUntil) {
+          // brief grace after each bite so packs can't stun-lock you
+          g.meleeGraceUntil = g.time + 0.4;
+          damagePlayer(z.damage);
+        }
       } else {
         // opportunistic swipes at anything that blunders into reach
         let swiped = false;
@@ -1991,6 +2105,17 @@ function update(dt) {
 
   p.hurtFlash = Math.max(0, p.hurtFlash - dt);
 
+  if (p.hp <= 0 && !g.lastStandUsed && gameMode === 'campaign') {
+    // LAST STAND: your first death each level is a refusal
+    g.lastStandUsed = true;
+    p.hp = derived(char).maxHp * 0.5;
+    p.armorHP = p.armorMax;
+    p.invulnUntil = g.time + 3;
+    g.buffs.rage = Math.max(g.buffs.rage, 5);
+    banner('LAST STAND', 'not today — 3s invulnerable', '#ffd54f');
+    sfx.playFanfare();
+    addScreenBlood(2);
+  }
   if (p.hp <= 0) {
     overTitle = 'YOU DIED';
     overDied = true;
@@ -2143,7 +2268,7 @@ function drawGround() {
   }
   // roads through the city / base
   const lv = level();
-  if (lv.key === 'city' || lv.key === 'base') {
+  if (lv.key === 'city' || lv.key === 'base' || gameMode === 'drive') {
     const roadW = 150;
     ctx.fillStyle = 'rgba(24,26,30,0.85)';
     ctx.fillRect(0, g.world.h / 2 - roadW / 2, g.world.w, roadW);
@@ -2490,6 +2615,35 @@ function drawAlly(a) {
 
 function drawPlayer() {
   const p = game.player;
+  if (gameMode === 'drive') {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(-Math.PI / 2); // sprites face right; the car drives up
+    const carSp = SPRITES.drive_armored || SPRITES.drive_sports;
+    if (carSp) drawSpriteFit(carSp, 110, 60);
+    else {
+      ctx.fillStyle = '#5d4037';
+      ctx.fillRect(-50, -24, 100, 48);
+    }
+    // nitro flames
+    if (p.dashT > 0) {
+      ctx.fillStyle = Math.floor(performance.now() / 60) % 2 ? '#ffa726' : '#ffe082';
+      ctx.beginPath();
+      ctx.moveTo(-52, -10);
+      ctx.lineTo(-86 - Math.random() * 18, 0);
+      ctx.lineTo(-52, 10);
+      ctx.fill();
+    }
+    ctx.restore();
+    // turret muzzle flash
+    if (p.muzzleFlash > 0) {
+      ctx.fillStyle = '#ffe082';
+      ctx.beginPath();
+      ctx.arc(p.x + Math.cos(p.angle) * 40, p.y + Math.sin(p.angle) * 40, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return;
+  }
   ctx.save();
   ctx.translate(p.x, p.y);
   // gait: rock around the aim axis + squash-stretch step bounce
@@ -2792,6 +2946,7 @@ function drawHUD() {
   ctx.font = 'bold 18px monospace';
   ctx.fillStyle = gameMode !== 'campaign' ? '#ff1744' : '#ef9a9a';
   const topLine =
+    gameMode === 'drive' ? `🚗 DRIVE — ${Math.round((game.driveStart - p.y) / 10)}m / ${Math.round((game.driveStart - 400) / 10)}m · HOLD THE ROAD` :
     gameMode === 'horde' ? `☠ HORDE — ROUND ${hordeRound} ☠` :
     gameMode === 'extreme' ? `☠☠ ALL-HORDE EXTREME — ROUND ${hordeRound} ☠☠` :
     gameMode === 'kill' ? `🔪 KILL MODE — ${Math.max(0, Math.ceil(game.killT || 0))}s — ${game.kills} KILLS` :
@@ -3045,6 +3200,7 @@ let overTitle = 'YOU DIED';
 let overDied = true;
 
 const MODES = [
+  { id: 'drive', label: '🚗 DRIVE', desc: 'ram through to the next stage' },
   { id: 'horde', label: '☠ HORDE', desc: '200 at once · 5x speed' },
   { id: 'extreme', label: '☠☠ EXTREME', desc: 'ALL types · 8x speed' },
   { id: 'kill', label: '🔪 KILL MODE', desc: '90s · ∞ ammo · 2x dmg' },
@@ -3178,8 +3334,9 @@ function drawLevelSelect() {
     });
   // row 2: the crazy modes
   by2cur = by + bh2 + 12;
-  const mw = Math.min(176, (view.w - 80 - 4 * 10) / 5);
-  const mx0 = cx - (mw * 5 + 10 * 4) / 2;
+  const nM = MODES.length;
+  const mw = Math.min(176, (view.w - 80 - (nM - 1) * 10) / nM);
+  const mx0 = cx - (mw * nM + 10 * (nM - 1)) / 2;
   MODES.forEach((m, i) => {
     const bx = mx0 + i * (mw + 10);
     const idx = uiButtons.length;
@@ -3444,13 +3601,18 @@ function drawTitle() {
     const w = titleVideo.videoWidth * s;
     const h = titleVideo.videoHeight * s;
     ctx.drawImage(titleVideo, (view.w - w) / 2, (view.h - h) / 2, w, h);
-    // DEAD ZONE logo over the video
+    // dim the video so the UI reads, then a heavy outlined logo
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.fillRect(0, 0, view.w, view.h);
     ctx.save();
     ctx.textAlign = 'center';
-    ctx.font = 'bold 92px monospace';
-    ctx.fillStyle = '#b71c1c';
+    ctx.font = `bold ${Math.min(120, view.w / 9)}px monospace`;
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = '#000';
+    ctx.strokeText('DEAD ZONE', cx, view.h * 0.3);
+    ctx.fillStyle = '#d32f2f';
     ctx.shadowColor = '#ff1744';
-    ctx.shadowBlur = 28 + Math.sin(t * 2) * 10;
+    ctx.shadowBlur = 30 + Math.sin(t * 2) * 10;
     ctx.fillText('DEAD ZONE', cx, view.h * 0.3);
     ctx.restore();
     drawTitleOverlay(t, cx);
@@ -3505,7 +3667,7 @@ function drawTitle() {
 }
 
 function drawTitleOverlay(t, cx) {
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillStyle = 'rgba(0,0,0,0.62)';
     ctx.fillRect(0, view.h - 170, view.w, 170);
     ctx.save();
     ctx.textAlign = 'center';
