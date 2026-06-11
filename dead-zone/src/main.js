@@ -1,6 +1,6 @@
 import { initInput, input, wasPressed, consumePressed } from './input.js';
 import { WEAPONS, WEAPON_ORDER, AMMO_RESERVE } from './weapons.js';
-import { spawnZombie, randomZombieType } from './zombies.js';
+import { spawnZombie, randomZombieType, randomBotType } from './zombies.js';
 import { LEVELS, VICTORY_ART, EPILOGUE, PRE_CUTSCENES, VICTORY_SHOTS } from './levels.js';
 import { HEROES, heroById, bonusText } from './heroes.js';
 import {
@@ -118,6 +118,9 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'slashfx', 'roof1', 'roof2', 'roof3', 'roof4',
                     'supplydrop', 'streakflame', 'bonusstar',
                     'debris_plate', 'debris_gear', 'debris_arm', 'gunship',
+                    'bot_breacher', 'bot_scout', 'bot_juggernaut', 'bot_kamikaze',
+                    'bot_marksman', 'bot_enforcer', 'bot_overseer', 'bot_warframe',
+                    'paratrooper', 'hackchip',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -808,6 +811,8 @@ function newGame() {
       r: 180 + Math.random() * 220, vx: 6 + Math.random() * 10, a: 0.05 + Math.random() * 0.05,
     })),
     bombers: [],
+    overclock: 0,
+    robotWave: false,
     flybyT: 25 + Math.random() * 35,
     drops: [],
     supplyT: 35 + Math.random() * 25,
@@ -1064,13 +1069,33 @@ function nextWave() {
   }
   // 3-wave structure: 100 → 300 → 3-minute stand against the 5,000
   if (g.wave >= lv.waves) {
+    // WAVE 3: the dead go quiet — and the MACHINES wake up
     g.survivalT = 180;
     g.survivalPool = 5000;
     g.spawnQueue = [];
-    for (let i = 0; i < lv.bosses; i++) g.zombies.push(spawnLevelZombie('boss'));
-    banner('SURVIVE 3:00', '5,000 OF THEM ARE COMING', '#ff1744');
-    radio('echo', 'ECHO-6: Reading a mass signature. All of them. RUN OR HOLD — THREE MINUTES.', '#80cbc4');
+    g.robotWave = true;
+    for (let i = 0; i < lv.bosses; i++) g.zombies.push(spawnLevelZombie('bot_warframe'));
+    banner('⚠ ROBOT WAVE ⚠', 'THE MACHINES ARE AWAKE — SURVIVE 3:00', '#80d8ff');
+    radio('echo', 'ECHO-6: "Steel signatures, thousands. The MACHINES are awake. Hold three minutes."', '#80cbc4');
     sfx.playScream();
+    // REINFORCEMENTS: two survivors drop in with loaded supply crates
+    const pool = HEROES.filter((h2) => h2.id !== char.heroId && h2.id !== char.partnerId);
+    for (let i = 0; i < 2 && pool.length; i++) {
+      const rh = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+      const rf = makeAlly('soldier', g.world);
+      rf.type = 'reinforcement';
+      rf.sprite = rh.sprite;
+      rf.name = rh.name.split(' ')[0];
+      rf.hp = rf.maxHp = 260;
+      rf.damage *= 1.6;
+      rf.color = '#80d8ff';
+      rf.x = g.player.x + (Math.random() - 0.5) * 260;
+      rf.y = g.player.y + (Math.random() - 0.5) * 260;
+      rf.dropT = 2.2 + i * 0.6;
+      g.allies.push(rf);
+      g.drops.push({ x: rf.x + 50, y: rf.y + 50, landT: 2.6, life: 35 });
+    }
+    banner('REINFORCEMENTS INBOUND', 'two survivors dropping in — crates with them', '#80d8ff');
     return;
   }
   if (g.wave > 1) {
@@ -1636,7 +1661,7 @@ function update(dt) {
           y: p.y + Math.sin(p.angle) * (p.radius + 10),
           vx: Math.cos(a) * ws.bulletSpeed,
           vy: Math.sin(a) * ws.bulletSpeed,
-          damage: ws.damage * squadDmgMult(), color: ws.color,
+          damage: ws.damage * squadDmgMult() * (1 + (g.overclock || 0)), color: ws.color,
           life: ws.flame ? 0.32 : ws.mortar ? (ws.rocket ? 1.4 : 0.85) : 1.2,
           pierce: ws.pierce ?? 1, hit: new Set(), friendly: false,
           mortar: !!ws.mortar, rocket: !!ws.rocket, flame: !!ws.flame,
@@ -1842,7 +1867,7 @@ function update(dt) {
     if (g.survivalT < 15 && !g.sv15) { g.sv15 = true; radio('echo', 'ECHO-6: "FIFTEEN SECONDS. SOMETHING BIG IS MOVING UNDER THEM—"', '#ff8a80'); }
     let burst = 0;
     while (g.survivalPool > 0 && g.zombies.length < 320 && burst < 8) {
-      g.zombies.push(spawnLevelZombie(randomZombieType(char.campaignLevel)));
+      g.zombies.push(spawnLevelZombie(g.robotWave ? randomBotType() : randomZombieType(char.campaignLevel)));
       g.survivalPool--;
       burst++;
     }
@@ -1854,7 +1879,7 @@ function update(dt) {
       g.zombies = [];
       g.survivalPool = 0;
       g.survivalT = null;
-      banner('YOU SURVIVED THE 5,000', 'but something bigger is coming…', '#ffd54f');
+      banner('MACHINE WAVE BROKEN', 'but something bigger is coming…', '#ffd54f');
       sfx.playFanfare();
       p.hp = derived(char).maxHp; // full restore before the boss
       p.armorHP = p.armorMax;
@@ -2180,6 +2205,7 @@ function update(dt) {
       }
       continue;
     }
+    if (a.dropT > 0) { a.dropT -= dt; continue; } // still on the chute
     const dp = Math.hypot(p.x - a.x, p.y - a.y);
     if (a.type === 'partner') {
       // the sidekick has a mind of its own: roams and picks its own fights,
@@ -2410,21 +2436,44 @@ function update(dt) {
     dr.life -= dt;
     if (Math.hypot(p.x - dr.x, p.y - dr.y) < 34) {
       dr.life = 0;
+      const lacks = ['flamer', 'minigun'].filter((w3) => !char.ownedWeapons.includes(w3));
       const roll = Math.random();
-      if (roll < 0.4) {
+      if (lacks.length && roll < 0.45) {
+        // WEAPON CACHE: the drop crews hand out the heavy stuff
+        const w3 = lacks[0];
+        char.ownedWeapons.push(w3);
+        p.mags[w3] = weaponStats(char, w3).magSize;
+        p.reserve[w3] = AMMO_RESERVE[w3];
+        saveCharacter(char);
+        banner('WEAPON CACHE', `${WEAPONS[w3].name} UNLOCKED — courtesy of the drop crews`, '#ffd54f');
+        g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: `★ ${WEAPONS[w3].name}`, color: '#ffd54f', life: 1.8, vy: -45 });
+      } else if (roll < 0.22) {
         const amt = 150 + Math.floor(Math.random() * 250);
         char.scrap += amt;
         g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: `★ BONUS +⚙${amt}`, color: '#ffd740', life: 1.6, vy: -45 });
-      } else if (roll < 0.7) {
+      } else if (roll < 0.44) {
         for (const w2 of Object.keys(p.reserve)) if (p.reserve[w2] !== Infinity) p.reserve[w2] += Math.round(AMMO_RESERVE[w2] * 0.5);
         g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: '★ AMMO RESUPPLY', color: '#80d8ff', life: 1.6, vy: -45 });
-      } else {
+      } else if (roll < 0.62) {
         char.nades.frag += 2;
         char.dynamite = (char.dynamite || 0) + 1;
         g.buffs.rage = Math.max(g.buffs.rage, 6);
         g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: '★ ORDNANCE + RAGE', color: '#ff7043', life: 1.6, vy: -45 });
+      } else if (roll < 0.82) {
+        // HACK CHIP: every chip overclocks your guns further — they stack
+        g.overclock = Math.min(1.0, (g.overclock || 0) + 0.1);
+        g.dmgNumbers.push({ x: dr.x, y: dr.y - 20, txt: `⚡ HACK CHIP — OVERCLOCK +${Math.round(g.overclock * 100)}%`, color: '#69f0ae', life: 1.8, vy: -45 });
+        banner('GUNS OVERCLOCKED', `weapon damage +${Math.round(g.overclock * 100)}% this level`, '#69f0ae');
+      } else {
+        // INSTANT AIRSTRIKE around your position
+        for (let i2 = 0; i2 < 10; i2++) {
+          const a3 = Math.random() * Math.PI * 2;
+          const r3 = 130 + Math.random() * 380;
+          g.strikes.push({ x: p.x + Math.cos(a3) * r3, y: p.y + Math.sin(a3) * r3, t: 0.3 + i2 * 0.2 });
+        }
+        banner('AIRSTRIKE PACKAGE', 'danger close', '#ff8a3d');
       }
-      banner('SUPPLY SECURED', 'the airforce still loves you', '#ffd54f');
+      if (roll >= 0.45 || !lacks.length) banner('SUPPLY SECURED', 'the drop crews still love you', '#ffd54f');
       sfx.playPurchase();
       addShake(3);
     }
@@ -2745,6 +2794,9 @@ const SCRAP_DROPS = {
   crawler: [2, 3], spitter: [6, 4], exploder: [6, 4], screamer: [8, 5],
   rogue: [10, 6], granny: [8, 5], cop: [8, 5], hazmat: [9, 5],
   butcher: [14, 8], dog: [2, 3], stalker: [6, 4],
+  bot_breacher: [6, 4], bot_scout: [6, 4], bot_juggernaut: [18, 8],
+  bot_kamikaze: [7, 4], bot_marksman: [12, 6], bot_enforcer: [10, 5],
+  bot_overseer: [14, 6], bot_warframe: [120, 60],
 };
 
 function killZombie(z, dirAngle) {
@@ -3396,6 +3448,26 @@ function drawAlly(a) {
   }
   ctx.save();
   ctx.translate(a.x, a.y);
+  if (a.dropT > 0) {
+    // descending under canopy: shadow shrinks as the chute comes down
+    const k3 = a.dropT / 2.8;
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(0, 14, 22 * (1 - k3 * 0.5), 10 * (1 - k3 * 0.5), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    const sc3 = 1 + k3 * 1.1;
+    if (SPRITES.paratrooper) drawSpriteFit(SPRITES.paratrooper, 78 * sc3, 78 * sc3);
+    else {
+      ctx.fillStyle = '#80d8ff';
+      ctx.beginPath();
+      ctx.arc(0, 0, 16 * sc3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    return;
+  }
   if (a.down) {
     ctx.globalAlpha = 0.55;
     ctx.rotate(0.6);
@@ -3841,6 +3913,12 @@ function drawHUD() {
     ctx.fillStyle = '#42a5f5';
     ctx.font = 'bold 14px monospace';
     ctx.fillText(`SHIELD ${Math.ceil(game.buffs.shield)}s`, bx, view.h - 96);
+    bx -= 120;
+  }
+  if (game.overclock > 0) {
+    ctx.fillStyle = '#69f0ae';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText(`⚡ OVERCLOCK +${Math.round(game.overclock * 100)}%`, bx, view.h - 96);
   }
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
