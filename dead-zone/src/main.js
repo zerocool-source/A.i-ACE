@@ -53,6 +53,8 @@ function getImage(url) {
 // Generated top-down sprites (all face right). Every draw call falls back to
 // the procedural shapes until its sprite finishes loading / if it's missing.
 const SPRITES = {};
+let spritesTotal = 0;
+let spritesLoaded = 0;
 
 function trimToAlphaBounds(img) {
   const c = document.createElement('canvas');
@@ -94,12 +96,17 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'player_run', 'player_f_run', 'hero_medic_run', 'hero_builder_run',
                     'hero_hacker_run', 'hero_cop_run', 'hero_biker_run', 'hero_engineer_run',
                     'hero_veteran_run', 'hero_athlete_run',
-                    'killx', 'boom', 'walker_gore', 'runner_gore', 'brute_gore',
+                    'killx', 'killx2', 'comboskull', 'boom', 'walker_gore', 'runner_gore', 'brute_gore',
                     'bus', 'rubble', 'dumpster', 'barricade']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
+  spritesTotal++;
   img.onload = () => {
     SPRITES[name] = trimToAlphaBounds(img);
+    spritesLoaded++;
+  };
+  img.onerror = () => {
+    spritesLoaded++; // missing art falls back procedurally
   };
 }
 
@@ -2321,7 +2328,11 @@ function killZombie(z, dirAngle) {
   const bigKill = z.radius > 19 || z.super;
   // kill X grows with your combo — at high chains they get HUGE
   const xr = (bigKill ? 26 : 13) * (1 + Math.min(2.2, g.combo * 0.045));
-  g.killMarks.push({ x: z.x, y: z.y, t: 0.4, big: bigKill, r: xr, rot: (Math.random() - 0.5) * 0.7 });
+  g.killMarks.push({ x: z.x, y: z.y, t: 0.65, big: bigKill, r: Math.max(24, xr), rot: (Math.random() - 0.5) * 0.7 });
+  // the combo number itself pops at the kill site
+  if (g.combo >= 2) {
+    g.dmgNumbers.push({ x: z.x, y: z.y + 14, txt: `×${g.combo}`, color: '#ff9100', life: 0.7, vy: -34 });
+  }
   if (bigKill) {
     hitStopT = Math.max(hitStopT, 0.06);
     addShake(4);
@@ -3260,19 +3271,32 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
   ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, view.w / 2, 46);
-  // combo meter
-  if (game.combo >= 3) {
-    const pulse2 = 1 + Math.min(0.3, game.combo * 0.01) * Math.sin(performance.now() / 90);
-    ctx.font = `bold ${Math.round(24 * pulse2)}px monospace`;
-    ctx.lineWidth = 4;
+  // combo meter — PUNCHES bigger on every kill, skull at 25+
+  if (game.combo >= 2) {
+    if (game.combo !== game._lastComboHud) {
+      game._lastComboHud = game.combo;
+      game._comboPop = 0.22; // scale punch on increment
+    }
+    game._comboPop = Math.max(0, (game._comboPop || 0) - 0.016);
+    const punch = 1 + (game._comboPop || 0) * 2.4;
+    const baseSize = Math.min(46, 22 + game.combo * 0.35);
+    ctx.font = `bold ${Math.round(baseSize * punch)}px monospace`;
+    ctx.lineWidth = 5;
     ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-    ctx.strokeText(`COMBO ×${game.combo}`, view.w / 2, 64);
-    ctx.fillStyle = '#ffd740';
-    ctx.fillText(`COMBO ×${game.combo}`, view.w / 2, 64);
+    ctx.strokeText(`×${game.combo}`, view.w / 2, 64);
+    ctx.fillStyle = game.combo >= 25 ? '#ff9100' : '#ffd740';
+    ctx.fillText(`×${game.combo}`, view.w / 2, 64);
+    if (game.combo >= 25 && SPRITES.comboskull) {
+      ctx.save();
+      ctx.translate(view.w / 2 - baseSize * 1.6, 64 + baseSize * 0.55);
+      const wob = 1 + Math.sin(performance.now() / 110) * 0.08;
+      drawSpriteFit(SPRITES.comboskull, 44 * wob, 44 * wob);
+      ctx.restore();
+    }
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(view.w / 2 - 60, 94, 120, 5);
+    ctx.fillRect(view.w / 2 - 60, 64 + baseSize + 6, 120, 5);
     ctx.fillStyle = '#ffd740';
-    ctx.fillRect(view.w / 2 - 60, 94, 120 * Math.max(0, game.comboT / 2.2), 5);
+    ctx.fillRect(view.w / 2 - 60, 64 + baseSize + 6, 120 * Math.max(0, game.comboT / 2.2), 5);
   }
   // survival countdown
   if (game.survivalT != null) {
@@ -3996,6 +4020,17 @@ function drawTitle() {
 }
 
 function drawTitleOverlay(t, cx) {
+    if (spritesLoaded < spritesTotal) {
+      const frac = spritesLoaded / Math.max(1, spritesTotal);
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(cx - 160, view.h - 196, 320, 20);
+      ctx.fillStyle = '#43a047';
+      ctx.fillRect(cx - 158, view.h - 194, 316 * frac, 16);
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(`LOADING ASSETS ${Math.round(frac * 100)}%`, cx, view.h - 192);
+    }
     ctx.fillStyle = 'rgba(0,0,0,0.62)';
     ctx.fillRect(0, view.h - 170, view.w, 170);
     ctx.save();
@@ -4396,14 +4431,15 @@ function render(dt) {
   ctx.globalAlpha = 1;
   // red kill X's, SYNTHETIK style
   for (const km of game.killMarks) {
-    const t = km.t / 0.4;
-    const r = (km.r || (km.big ? 26 : 13)) * (1.6 - t * 0.6);
-    if (SPRITES.killx) {
+    const t = km.t / 0.65;
+    const r = (km.r || (km.big ? 26 : 13)) * (1.7 - t * 0.7);
+    const xSprite = SPRITES.killx2 || SPRITES.killx;
+    if (xSprite) {
       ctx.save();
       ctx.translate(km.x, km.y);
       ctx.rotate(km.rot || 0);
       ctx.globalAlpha = t;
-      drawSpriteFit(SPRITES.killx, r * 2.4, r * 2.4);
+      drawSpriteFit(xSprite, r * 2.6, r * 2.6);
       ctx.restore();
       ctx.globalAlpha = 1;
     } else {
