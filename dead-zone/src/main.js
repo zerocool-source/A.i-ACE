@@ -827,7 +827,12 @@ function spawnLevelZombie(type) {
       z.y = Math.max(30, Math.min(g.world.h - 30, pr.y + pr.h / 2 + (Math.random() - 0.5) * pr.h));
     }
   }
-  if (type !== 'boss') z.radius = Math.max(12, Math.min(17, z.radius)); // player-scale hitboxes
+  // one uniform 'decent' size for the horde (small per-spawn variance only);
+  // brutes/butchers read bigger, bosses tower
+  if (type !== 'boss') {
+    const big = type === 'brute' || type === 'butcher';
+    z.radius = (big ? 21 : 17) + Math.random() * 2;
+  }
   z.hp = z.maxHp = Math.round(z.hp * lv.hpMult);
   z.speed *= lv.speedMult;
   z.damage = Math.round(z.damage * (1 + char.campaignLevel * 0.25));
@@ -1123,7 +1128,7 @@ function update(dt) {
   } else {
   // dodge dash: SPACE / Ⓑ — burst of speed with brief invulnerability
   p.dashCooldown = Math.max(0, p.dashCooldown - dt);
-  if ((wasPressed(' ') || gpPressed('b')) && !charSheetOpen && p.dashCooldown <= 0 && p.stamina > 0.2) {
+  if ((wasPressed(' ') || gpPressed('b') || gpPressed('l3')) && !charSheetOpen && p.dashCooldown <= 0 && p.stamina > 0.2) {
     const len = Math.max(0.01, Math.hypot(dx, dy));
     const ang = moving ? Math.atan2(dy / len, dx / len) : p.angle;
     p.vx = Math.cos(ang) * spd * 3.1;
@@ -1268,7 +1273,7 @@ function update(dt) {
     sfx.playEmptyClick();
     saveCharacter(char);
   };
-  if (wasPressed('t')) {
+  if (wasPressed('t') || gpPressed('left')) {
     const order = ['frag', 'smoke', 'decoy'];
     g.nadeSel = order[(order.indexOf(g.nadeSel) + 1) % order.length];
     g.dmgNumbers.push({ x: p.x, y: p.y - 28, txt: g.nadeSel.toUpperCase() + ` ×${char.nades[g.nadeSel]}`, color: '#aed581', life: 0.9, vy: -45 });
@@ -1302,7 +1307,7 @@ function update(dt) {
   g.throwables = g.throwables.filter((tb) => tb.fuse > 0);
 
   // -- airstrike beacon [X]
-  if (wasPressed('x') && (char.airstrikes || 0) > 0) {
+  if ((wasPressed('x') || gpPressed('r3')) && (char.airstrikes || 0) > 0) {
     char.airstrikes--;
     saveCharacter(char);
     banner('AIRSTRIKE INBOUND', 'danger close', '#ffd54f');
@@ -1333,7 +1338,7 @@ function update(dt) {
   h.charge = Math.min(1, h.charge + dt / d.higgsCooldown);
   if (h.ringT >= 0) h.ringT += dt;
   // C swaps between owned shield cores
-  if (wasPressed('c') && char.shields.length > 1) {
+  if ((wasPressed('c') || gpPressed('right')) && char.shields.length > 1) {
     const i = char.shields.indexOf(char.shieldType);
     char.shieldType = char.shields[(i + 1) % char.shields.length];
     saveCharacter(char);
@@ -1594,18 +1599,18 @@ function update(dt) {
     }
     z.attackCooldown -= dt;
     if (z.attackCooldown <= 0) {
-      if (distT < z.radius + p.radius + 4) {
-        z.attackCooldown = 0.8;
+      if (distT < z.radius + p.radius + 10) {
         if (gameMode === 'drive') {
+          z.attackCooldown = 0.8;
           // RAM. the car wins
           z.hp = 0;
           killZombie(z, Math.atan2(z.y - p.y, z.x - p.x));
           addScreenBlood(0.5);
-          if (z.radius > 17) damagePlayer(8); // only the big ones dent you
-        } else if (g.time >= g.meleeGraceUntil) {
-          // brief grace after each bite so packs can't stun-lock you
-          g.meleeGraceUntil = g.time + 0.4;
-          damagePlayer(z.damage);
+          if (z.radius > 19) damagePlayer(8); // only the big ones dent you
+        } else if (!z.windup) {
+          // telegraphed attack: rear back for a third of a second first
+          z.windup = 0.33;
+          z.attackCooldown = 0.9;
         }
       } else {
         // opportunistic swipes at anything that blunders into reach
@@ -1651,6 +1656,21 @@ function update(dt) {
       z.hp = 0;
       z._dead = true;
       explode(z.x, z.y, z.explodes.radius, z.damage * 2.2, true);
+    }
+    // windup resolves: still in reach -> the swipe lands; dodged -> whiff
+    if (z.windup) {
+      z.windup -= dt;
+      if (z.windup <= 0) {
+        z.windup = 0;
+        const reach = z.radius + p.radius + 16;
+        if (distP < reach && g.time >= g.meleeGraceUntil) {
+          g.meleeGraceUntil = g.time + 0.4;
+          damagePlayer(z.damage);
+          // little forward hop with the hit
+          z.x += ((p.x - z.x) / Math.max(1, distP)) * 10;
+          z.y += ((p.y - z.y) / Math.max(1, distP)) * 10;
+        }
+      }
     }
     z.groanTimer -= dt;
     if (z.groanTimer <= 0) {
@@ -2369,6 +2389,18 @@ function drawProps() {
       }
     } else if (pr.kind === 'car') {
       const burning = pr.seed < 0.35;
+      // a chunk of parked cars use the generated car sprites
+      const parkedSp = !burning && pr.seed > 0.65
+        ? SPRITES[['drive_sports', 'drive_taxi', 'drive_police'][((pr.seed * 100) | 0) % 3]]
+        : null;
+      if (parkedSp) {
+        ctx.save();
+        ctx.translate(pr.x + pr.w / 2, pr.y + pr.h / 2);
+        if (pr.h > pr.w) ctx.rotate(Math.PI / 2);
+        drawSpriteFit(parkedSp, Math.max(pr.w, pr.h) * 1.1, Math.min(pr.w, pr.h) * 1.25);
+        ctx.restore();
+        continue;
+      }
       ctx.fillStyle = burning ? '#26211d' : CAR_COLORS[(pr.seed * CAR_COLORS.length) | 0];
       ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
       ctx.fillStyle = '#11151a';
@@ -2499,11 +2531,20 @@ function drawZombie(z) {
   const sprite = SPRITES[z.type];
   if (sprite) {
     ctx.save();
-    ctx.rotate(a + Math.sin(z.wobble * 2) * 0.09);
+    const rear = z.windup ? -0.3 * Math.sin((0.33 - z.windup) / 0.33 * Math.PI) : 0;
+    ctx.rotate(a + Math.sin(z.wobble * 2) * 0.09 + rear);
     const zsq = Math.sin(z.wobble * 4) * 0.04;
-    ctx.scale(1 + zsq, 1 - zsq);
+    const wScale = z.windup ? 1.12 : 1;
+    ctx.scale((1 + zsq) * wScale, (1 - zsq) * wScale);
     drawSprite(sprite, z.radius * 3.2);
     ctx.restore();
+    if (z.windup) {
+      ctx.strokeStyle = `rgba(255,82,82,${0.4 + 0.5 * Math.sin(performance.now() / 60)})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, z.radius + 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   } else {
     ctx.fillStyle = z.color;
     ctx.beginPath();
@@ -2939,7 +2980,7 @@ function drawHUD() {
   ctx.fillText(p.dashCooldown <= 0 ? 'DASH READY' : `DASH ${p.dashCooldown.toFixed(1)}s`, view.w - 24, view.h - 112);
   if (gamepad.connected) {
     ctx.fillStyle = '#80cbc4';
-    ctx.fillText('🎮 controller connected — LS move · RS aim · RT fire · LB/RB weapons · Ⓧ reload · Ⓨ higgs', view.w - 24, view.h - 22);
+    ctx.fillText('🎮 LS move·RS aim·RT fire·LB/RB guns·Ⓧ reload·Ⓨ shield·Ⓑ/L3 dash·R3 airstrike·◄nade ►core', view.w - 24, view.h - 22);
   }
 
   ctx.textAlign = 'center';
@@ -3273,11 +3314,11 @@ function drawLevelSelect() {
     if (art) {
       const s = Math.max(cw / art.naturalWidth, chh / art.naturalHeight);
       ctx.globalAlpha = unlocked ? 1 : 0.25;
-      ctx.drawImage(art, x + cw / 2 - (art.naturalWidth * s) / 2, y0 + chh / 2 - (art.naturalHeight * s) / 2, art.naturalWidth * s, art.naturalHeight * s);
+      ctx.drawImage(art, x + cw / 2 - (art.naturalWidth * s) / 2, yRow + chh / 2 - (art.naturalHeight * s) / 2, art.naturalWidth * s, art.naturalHeight * s);
       ctx.globalAlpha = 1;
     }
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(x, y0 + chh - 74, cw, 74);
+    ctx.fillRect(x, yRow + chh - 74, cw, 74);
     ctx.restore();
     ctx.strokeStyle = focused ? '#ffd54f' : unlocked ? '#546e7a' : '#2c343c';
     ctx.lineWidth = focused ? 3 : 1;
@@ -3285,12 +3326,12 @@ function drawLevelSelect() {
     ctx.textAlign = 'center';
     ctx.font = 'bold 13px monospace';
     ctx.fillStyle = unlocked ? '#fff' : '#546e7a';
-    ctx.fillText(`LEVEL ${i + 1}`, x + cw / 2, y0 + chh - 64);
+    ctx.fillText(`LEVEL ${i + 1}`, x + cw / 2, yRow + chh - 64);
     ctx.font = 'bold 12px monospace';
-    ctx.fillText(unlocked ? lv.name : '🔒 LOCKED', x + cw / 2, y0 + chh - 47, cw - 10);
+    ctx.fillText(unlocked ? lv.name : '🔒 LOCKED', x + cw / 2, yRow + chh - 47, cw - 10);
     ctx.font = '10px monospace';
     ctx.fillStyle = '#90a4ae';
-    if (unlocked) ctx.fillText(`${lv.waves} waves · ${lv.bosses} boss${lv.bosses > 1 ? 'es' : ''} · 3 secrets`, x + cw / 2, y0 + chh - 28, cw - 10);
+    if (unlocked) ctx.fillText(`${lv.waves} waves · ${lv.bosses} boss${lv.bosses > 1 ? 'es' : ''} · 3 secrets`, x + cw / 2, yRow + chh - 28, cw - 10);
     button(x, yRow, cw, chh, () => {
       gameMode = 'campaign';
       char.campaignLevel = i;
@@ -3575,6 +3616,29 @@ function drawLevelIntro() {
     yy += 24;
   }
 
+  // shield loadout: pick your core before deploying
+  if (char.shields.length > 1) {
+    const sw = 130, sh2 = 34, sg = 10;
+    const sx0 = cx - (char.shields.length * sw + (char.shields.length - 1) * sg) / 2;
+    char.shields.forEach((core, ci) => {
+      const bx = sx0 + ci * (sw + sg);
+      const byy = view.h - panelH - 46;
+      const active = char.shieldType === core;
+      ctx.fillStyle = active ? 'rgba(20,40,30,0.95)' : 'rgba(16,18,22,0.9)';
+      ctx.fillRect(bx, byy, sw, sh2);
+      ctx.strokeStyle = active ? SHIELD_COLORS[core] : '#3c4650';
+      ctx.lineWidth = active ? 3 : 1;
+      ctx.strokeRect(bx, byy, sw, sh2);
+      ctx.font = 'bold 12px monospace';
+      ctx.fillStyle = SHIELD_COLORS[core];
+      ctx.textAlign = 'center';
+      ctx.fillText((core === 'health' ? 'GREEN' : core.toUpperCase()) + (active ? ' ✓' : ''), bx + sw / 2, byy + 11);
+      button(bx, byy, sw, sh2, () => {
+        char.shieldType = core;
+        saveCharacter(char);
+      });
+    });
+  }
   if (briefingChars() >= briefingTotal()) {
     ctx.font = 'bold 20px monospace';
     ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.4 * Math.sin(t * 3)})`;
@@ -4093,7 +4157,7 @@ function frameInner(now) {
   wasGpConnected = gamepad.connected;
 
   // gamepad UI focus: d-pad browses buttons laid out last frame, A activates
-  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect' || state === 'gameover';
+  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect' || state === 'gameover' || state === 'levelintro';
   if (uiState && uiButtons.length) {
     if (gpPressed('down') || gpPressed('right')) gpFocus = (gpFocus + 1) % uiButtons.length;
     if (gpPressed('up') || gpPressed('left')) gpFocus = (gpFocus - 1 + uiButtons.length) % uiButtons.length;

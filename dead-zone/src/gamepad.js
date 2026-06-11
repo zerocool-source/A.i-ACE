@@ -19,7 +19,8 @@ let prevButtons = [];
 
 const BUTTON_NAMES = {
   0: 'a', 1: 'b', 2: 'x', 3: 'y', 4: 'lb', 5: 'rb',
-  8: 'back', 9: 'start', 12: 'up', 13: 'down', 14: 'left', 15: 'right',
+  8: 'back', 9: 'start', 10: 'l3', 11: 'r3',
+  12: 'up', 13: 'down', 14: 'left', 15: 'right',
 };
 
 function axis(v) {
