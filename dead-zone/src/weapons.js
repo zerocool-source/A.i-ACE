@@ -42,7 +42,18 @@ export const WEAPONS = {
     fireInterval: 0.9, reloadTime: 2.6, spread: 0, pellets: 1,
     bulletSpeed: 2400, color: '#80d8ff', pierce: 99, price: 1200,
   },
+  sniper: {
+    name: 'SNIPER', key: '9', auto: false, damage: 400, magSize: 5,
+    fireInterval: 1.4, reloadTime: 2.8, spread: 0, pellets: 1,
+    bulletSpeed: 2800, color: '#fff59d', pierce: 5, price: 1500,
+  },
 };
 
-export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun'];
+export const WEAPON_ORDER = ['pistol', 'rifle', 'shotgun', 'smg', 'magnum', 'minigun', 'flak', 'railgun', 'sniper'];
+
+// reserve ammo carried per weapon at level start; the pistol never runs dry
+export const AMMO_RESERVE = {
+  pistol: Infinity, rifle: 150, shotgun: 42, smg: 210, magnum: 36,
+  minigun: 480, flak: 56, railgun: 20, sniper: 25,
+};
 export const STARTING_WEAPONS = ['pistol', 'rifle', 'shotgun', 'smg'];

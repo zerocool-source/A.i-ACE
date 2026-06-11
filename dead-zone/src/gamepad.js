@@ -27,7 +27,13 @@ function axis(v) {
 }
 
 function pickPad() {
-  const pads = navigator.getGamepads ? [...navigator.getGamepads()] : [];
+  let list = null;
+  try {
+    list = navigator.getGamepads ? navigator.getGamepads() : null;
+  } catch {
+    list = null;
+  }
+  const pads = list ? [...list] : [];
   // prefer a pad the browser recognizes as standard layout
   return (
     pads.find((p) => p && p.connected && p.mapping === 'standard') ||

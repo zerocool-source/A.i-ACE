@@ -1,6 +1,6 @@
 import { initInput, input, wasPressed, consumePressed } from './input.js';
-import { WEAPONS, WEAPON_ORDER } from './weapons.js';
-import { waveComposition, spawnZombie } from './zombies.js';
+import { WEAPONS, WEAPON_ORDER, AMMO_RESERVE } from './weapons.js';
+import { spawnZombie, randomZombieType } from './zombies.js';
 import { LEVELS, VICTORY_ART, EPILOGUE, PRE_CUTSCENES, VICTORY_SHOTS } from './levels.js';
 import { HEROES, heroById, bonusText } from './heroes.js';
 import {
@@ -75,7 +75,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'hero_medic', 'hero_builder', 'hero_hacker', 'hero_cop', 'hero_biker',
                     'hero_engineer', 'hero_veteran', 'hero_athlete',
                     'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder',
-                    'crawler', 'screamer', 'rogue', 'cache', 'wreck', 'statue']) {
+                    'crawler', 'screamer', 'rogue', 'cache', 'wreck', 'statue',
+                    'granny', 'cop', 'hazmat', 'butcher', 'dog', 'stalker']) {
   const img = new Image();
   img.src = asset(`sprites/${name}.png`);
   img.onload = () => {
@@ -447,6 +448,7 @@ function newGame() {
       stamina: 1,
       weapon: 'pistol',
       mags: Object.fromEntries(WEAPON_ORDER.map((w) => [w, weaponStats(char, w).magSize])),
+      reserve: { ...AMMO_RESERVE },
       fireCooldown: 0,
       reloading: 0,
       muzzleFlash: 0,
@@ -476,6 +478,10 @@ function newGame() {
     rogueBannerShown: false,
     frenzyTimer: 23,
     frenzyUntil: 0,
+    throwables: [],
+    survivalT: null, // wave-3 countdown
+    survivalPool: 0, // how many of the 5,000 are still unspawned
+    hordeEventAt: -1,
   };
   // hidden supply caches tucked far from the spawn — explore to find them
   for (let i = 0; i < 3; i++) {
@@ -517,6 +523,12 @@ function newGame() {
     partner.fireInterval = 0.26;
     partner.mag = partner.magSize = 24;
     partner.color = '#b39ddb';
+    partner.shield = 80;
+    partner.shieldMax = 80;
+    partner.shieldHitT = 99;
+    partner.followUntil = 0;
+    partner.roamT = 0;
+    partner.roamTarget = null;
     g.allies.push(partner);
   }
   return g;
@@ -555,6 +567,22 @@ function startLevel() {
   state = 'playing';
   charSheetOpen = false;
   Object.assign(cam, cameraTarget()); // snap, don't pan in from the old level
+  // supplies scattered across the map — ammo, explosives, medkits
+  const scatterPk = (n, type) => {
+    for (let i = 0; i < n; i++) {
+      const pk = {
+        x: 80 + Math.random() * (game.world.w - 160),
+        y: 80 + Math.random() * (game.world.h - 160),
+        type, t: 9999, radius: 10,
+      };
+      collideProps(pk);
+      game.pickups.push(pk);
+    }
+  };
+  scatterPk(10, 'ammo');
+  scatterPk(4, 'nade');
+  scatterPk(2, 'dyna');
+  scatterPk(3, 'medkit');
   if (hordeMode) {
     hordeRound = 1;
     game.wave = 1;
@@ -587,47 +615,49 @@ function startLevel() {
 
 function nextWave() {
   const lv = level();
-  game.wave++;
-  // revive downed squad members between waves
-  for (const a of game.allies) {
-    if (a.down) {
+  const g = game;
+  g.wave++;
+  // revive downed squad members between waves (the partner stays down —
+  // only the medic can drag them back up)
+  for (const a of g.allies) {
+    if (a.down && a.type !== 'partner') {
       a.down = false;
       a.hp = a.maxHp * 0.5;
     }
   }
-  // save point every 3rd wave
-  if (game.wave > 1 && (game.wave - 1) % 3 === 0) {
-    char.checkpoint = { lvl: char.campaignLevel, wave: game.wave };
-    char.hp = game.player.hp;
-    saveCharacter(char);
-    banner('CHECKPOINT REACHED', 'death returns you here', '#80cbc4');
+  // 3-wave structure: 100 → 300 → 3-minute stand against the 5,000
+  if (g.wave >= lv.waves) {
+    g.survivalT = 180;
+    g.survivalPool = 5000;
+    g.spawnQueue = [];
+    for (let i = 0; i < lv.bosses; i++) g.zombies.push(spawnLevelZombie('boss'));
+    banner('SURVIVE 3:00', '5,000 OF THEM ARE COMING', '#ff1744');
+    radio('echo', 'ECHO-6: Reading a mass signature. All of them. RUN OR HOLD — THREE MINUTES.', '#80cbc4');
+    sfx.playScream();
+    return;
   }
-  const effW = char.campaignLevel * lv.waves + game.wave;
-  let comp = waveComposition(effW);
-  const extra = Math.floor(comp.length * (lv.countMult - 1));
-  for (let i = 0; i < extra; i++) comp.push(comp[Math.floor(Math.random() * comp.length)]);
+  const count = g.wave === 1 ? 100 : 300;
+  const comp = [];
+  for (let i = 0; i < Math.round(count * lv.countMult); i++) comp.push(randomZombieType());
   // feral military units stalk the later levels
-  if (char.campaignLevel >= 2 && game.wave >= 2) {
-    for (let i = 0; i < Math.max(1, Math.floor(game.wave * 0.35)); i++) comp.push('rogue');
-    if (!game.rogueBannerShown) {
-      game.rogueBannerShown = true;
+  if (char.campaignLevel >= 2 && g.wave >= 2) {
+    for (let i = 0; i < 4 + char.campaignLevel; i++) comp.push('rogue');
+    if (!g.rogueBannerShown) {
+      g.rogueBannerShown = true;
       banner('ROGUE MILITARY INBOUND', 'they shoot anything that moves — including you', '#ef5350');
       radio('echo', 'ECHO-6: Those are Delta deserters. The infection took their minds, not their trigger fingers.', '#80cbc4');
     }
   }
-  if (game.wave === lv.waves) {
-    for (let i = 0; i < lv.bosses; i++) comp.push('boss');
-    banner(`WAVE ${game.wave}`, 'THE BOSS IS COMING');
-  } else {
-    banner(`WAVE ${game.wave}`, `${lv.name} — ${game.wave} / ${lv.waves}`);
-  }
-  if (game.wave > 1) squadBanter();
-  game.spawnQueue = comp;
-  game.spawnTimer = 0;
+  banner(`WAVE ${g.wave}`, `${count * lv.countMult | 0} INBOUND — ${lv.name}`);
+  if (g.wave > 1) squadBanter();
+  g.spawnQueue = comp;
+  g.spawnTimer = 0;
+  // a random HORDE EVENT can hit any wave: 8x-speed sprinters, all at once
+  g.hordeEventAt = Math.random() < 0.35 ? g.time + 10 + Math.random() * 20 : -1;
   // dump an opening surge so the wave hits immediately
-  const surge = Math.min(30, 15 + game.wave);
-  for (let i = 0; i < surge && game.spawnQueue.length; i++) {
-    game.zombies.push(spawnLevelZombie(game.spawnQueue.shift()));
+  const surge = Math.min(30, 15 + g.wave * 5);
+  for (let i = 0; i < surge && g.spawnQueue.length; i++) {
+    g.zombies.push(spawnLevelZombie(g.spawnQueue.shift()));
   }
 }
 
@@ -640,6 +670,15 @@ function spawnLevelZombie(type) {
   const r = Math.max(canvas.width, canvas.height) * 0.62 + 100;
   z.x = Math.max(30, Math.min(g.world.w - 30, g.player.x + Math.cos(a) * r));
   z.y = Math.max(30, Math.min(g.world.h - 30, g.player.y + Math.sin(a) * r));
+  // grannies hide flush against a structure and wait
+  if (type === 'granny' && g.props.length) {
+    const candidates = g.props.filter((pr) => pr.kind !== 'floor' && pr.kind !== 'door');
+    if (candidates.length) {
+      const pr = candidates[Math.floor(Math.random() * candidates.length)];
+      z.x = Math.max(30, Math.min(g.world.w - 30, pr.x + pr.w / 2 + (Math.random() < 0.5 ? -(pr.w / 2 + 22) : pr.w / 2 + 22)));
+      z.y = Math.max(30, Math.min(g.world.h - 30, pr.y + pr.h / 2 + (Math.random() - 0.5) * pr.h));
+    }
+  }
   z.hp = z.maxHp = Math.round(z.hp * lv.hpMult);
   z.speed *= lv.speedMult;
   z.damage = Math.round(z.damage * (1 + char.campaignLevel * 0.25));
@@ -742,7 +781,7 @@ function explode(x, y, radius, damage, hurtsPlayer) {
     }
     for (const a of g.allies) {
       if (a.down) continue;
-      if (Math.hypot(a.x - x, a.y - y) < radius + a.radius) a.hp -= damage * 0.4;
+      if (Math.hypot(a.x - x, a.y - y) < radius + a.radius) damageAlly(a, damage * 0.4);
     }
     for (const c of g.civilians) {
       if (Math.hypot(c.x - x, c.y - y) < radius + c.radius) c.dead = true;
@@ -754,7 +793,26 @@ function effArmor() {
   return derived(char).armor + (game.buffs.shield > 0 ? 3 : 0);
 }
 
-const LOOT_TYPES = ['medkit', 'ammo', 'shield', 'rage'];
+// route ally damage through the partner's energy shield
+function damageAlly(a, dmg) {
+  if (a.down) return;
+  if (a.shieldMax && a.shield > 0) {
+    const absorbed = Math.min(a.shield, dmg);
+    a.shield -= absorbed;
+    dmg -= absorbed;
+    a.shieldHitT = 0;
+  }
+  if (dmg <= 0) return;
+  a.hp -= dmg;
+  spawnBlood(a.x, a.y, 5, '#c62828');
+  if (a.hp <= 0 && !a.down) {
+    a.down = true;
+    banner(`${a.name} IS DOWN`, a.type === 'partner' ? 'only the medic can revive your partner' : 'back up at the next wave', '#ef9a9a');
+    goreKill(a.x, a.y, a.radius, null, false);
+  }
+}
+
+const LOOT_TYPES = ['medkit', 'ammo', 'ammo', 'shield', 'rage', 'nade', 'dyna'];
 
 function dropLoot(x, y, guaranteed = false) {
   if (!guaranteed && Math.random() > 0.12) return;
@@ -769,9 +827,17 @@ function applyPickup(type) {
     g.player.hp = Math.min(d.maxHp, g.player.hp + 35);
     g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+35 HP', color: '#81c784', life: 1, vy: -50 });
   } else if (type === 'ammo') {
-    for (const w of WEAPON_ORDER) g.player.mags[w] = weaponStats(char, w).magSize;
-    g.player.reloading = 0;
-    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: 'AMMO REFILLED', color: '#ffe082', life: 1, vy: -50 });
+    for (const w of WEAPON_ORDER) {
+      if (g.player.reserve[w] === Infinity) continue;
+      g.player.reserve[w] = Math.min(AMMO_RESERVE[w] * 2, g.player.reserve[w] + Math.ceil(AMMO_RESERVE[w] * 0.4));
+    }
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+AMMO RESERVES', color: '#ffe082', life: 1, vy: -50 });
+  } else if (type === 'nade') {
+    char.grenades = (char.grenades || 0) + 2;
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+2 GRENADES [G]', color: '#aed581', life: 1, vy: -50 });
+  } else if (type === 'dyna') {
+    char.dynamite = (char.dynamite || 0) + 1;
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+1 DYNAMITE [H]', color: '#ff8a65', life: 1, vy: -50 });
   } else if (type === 'shield') {
     g.buffs.shield = 30;
     g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+3 ARMOR 30s', color: '#90caf9', life: 1, vy: -50 });
@@ -908,8 +974,14 @@ function update(dt) {
   const ws = weaponStats(char, p.weapon);
   if (p.reloading > 0) {
     p.reloading -= dt;
-    if (p.reloading <= 0) p.mags[p.weapon] = ws.magSize;
-  } else if ((wasPressed('r') || gpPressed('x')) && p.mags[p.weapon] < ws.magSize) {
+    if (p.reloading <= 0) {
+      // reloading pulls from finite reserve ammo
+      const need = ws.magSize - p.mags[p.weapon];
+      const take = Math.min(need, p.reserve[p.weapon]);
+      p.mags[p.weapon] += take;
+      if (p.reserve[p.weapon] !== Infinity) p.reserve[p.weapon] -= take;
+    }
+  } else if ((wasPressed('r') || gpPressed('x')) && p.mags[p.weapon] < ws.magSize && p.reserve[p.weapon] > 0) {
     p.reloading = ws.reloadTime;
     sfx.playReload();
   }
@@ -925,6 +997,11 @@ function update(dt) {
     if (p.mags[p.weapon] <= 0) {
       sfx.playEmptyClick();
       p.fireCooldown = 0.25;
+      // dry on this gun entirely? fall back to the trusty pistol
+      if (p.reserve[p.weapon] <= 0 && p.weapon !== 'pistol') {
+        g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: 'OUT OF AMMO', color: '#ef5350', life: 0.9, vy: -45 });
+        p.weapon = 'pistol';
+      }
     } else {
       p.mags[p.weapon]--;
       p.fireCooldown = ws.fireInterval;
@@ -948,9 +1025,51 @@ function update(dt) {
           pierce: ws.pierce ?? 1, hit: new Set(), friendly: false,
         });
       }
-      if (p.mags[p.weapon] === 0) {
+      if (p.mags[p.weapon] === 0 && p.reserve[p.weapon] > 0) {
         p.reloading = ws.reloadTime;
         sfx.playReload();
+      }
+    }
+  }
+
+  // -- throwables: grenades [G] and dynamite [H]
+  const lob = (kind) => {
+    const speed = kind === 'nade' ? 540 : 420;
+    g.throwables.push({
+      x: p.x, y: p.y,
+      vx: Math.cos(p.angle) * speed, vy: Math.sin(p.angle) * speed,
+      fuse: kind === 'nade' ? 0.9 : 1.5, kind,
+    });
+    sfx.playEmptyClick();
+    saveCharacter(char);
+  };
+  if ((wasPressed('g') || gpPressed('up')) && char.grenades > 0) {
+    char.grenades--;
+    lob('nade');
+  }
+  if ((wasPressed('h') || gpPressed('down')) && char.dynamite > 0) {
+    char.dynamite--;
+    lob('dyna');
+  }
+  for (const tb of g.throwables) {
+    tb.x += tb.vx * dt;
+    tb.y += tb.vy * dt;
+    tb.vx *= 0.93;
+    tb.vy *= 0.93;
+    tb.fuse -= dt;
+    if (tb.fuse <= 0) {
+      if (tb.kind === 'nade') explode(tb.x, tb.y, 110, 170, false);
+      else explode(tb.x, tb.y, 180, 340, false);
+    }
+  }
+  g.throwables = g.throwables.filter((tb) => tb.fuse > 0);
+
+  // -- call the sidekick back to your side
+  if (wasPressed('q') || gpPressed('back')) {
+    for (const a of g.allies) {
+      if (a.type === 'partner' && !a.down) {
+        a.followUntil = g.time + 8;
+        radio(a.name, `${a.name}: "On my way!"`, a.color);
       }
     }
   }
@@ -977,11 +1096,45 @@ function update(dt) {
 
   // -- spawning / wave progression
   const lv = level();
+  // random HORDE EVENT: a pack of 8x-speed sprinters drops all at once
+  if (!hordeMode && g.hordeEventAt > 0 && g.time >= g.hordeEventAt) {
+    g.hordeEventAt = -1;
+    banner('⚠ HORDE EVENT ⚠', 'EIGHT TIMES FASTER — RUN', '#ff1744');
+    sfx.playScream();
+    sfx.playHiggsWhomp();
+    for (let i = 0; i < 80; i++) {
+      const z = spawnLevelZombie('walker');
+      z.fast8 = true;
+      g.zombies.push(z);
+    }
+  }
   if (hordeMode) {
     if (!g.zombies.length) {
       hordeRound++;
       spawnHorde();
       banner(`ROUND ${hordeRound}`, 'they keep coming', '#ff1744');
+      sfx.playFanfare();
+    }
+  } else if (g.survivalT != null) {
+    // the 3-minute stand: a 5,000-strong flood, capped live for performance
+    g.survivalT -= dt;
+    let burst = 0;
+    while (g.survivalPool > 0 && g.zombies.length < 320 && burst < 8) {
+      g.zombies.push(spawnLevelZombie(randomZombieType()));
+      g.survivalPool--;
+      burst++;
+    }
+    if (g.survivalT <= 0) {
+      for (const z of g.zombies) {
+        spawnBlood(z.x, z.y, 4, '#7b1d1d');
+        stampDecal(z.x, z.y, z.radius);
+      }
+      g.zombies = [];
+      g.survivalPool = 0;
+      g.survivalT = null;
+      g.levelClearing = true;
+      g.intermission = 0;
+      banner('YOU SURVIVED THE 5,000', 'the horde breaks against you', '#ffd54f');
       sfx.playFanfare();
     }
   } else if (g.spawnQueue.length) {
@@ -1036,6 +1189,25 @@ function update(dt) {
     if (g.time < z.boostUntil) spdZ *= 1.5; // screamer haste
     if (frenzy && !z.human) spdZ *= 3; // FRENZY surge
     if (hordeMode) spdZ *= 5; // horde mode: everything is 5x
+    if (z.fast8) spdZ *= 8; // horde-event sprinters
+    // granny lurks beside a building until you get close — then she SCREAMS
+    if (z.lurking) {
+      if (distT < z.ambush.triggerRange) {
+        z.lurking = false;
+        z.screamT = 0;
+        sfx.playScream();
+      } else {
+        z.flash = Math.max(0, z.flash - dt);
+        continue; // frozen in her hiding spot
+      }
+    }
+    if (z.ambush && !z.lurking && distT < 700) {
+      z.screamT = (z.screamT ?? 0) - dt;
+      if (z.screamT <= 0) {
+        z.screamT = z.ambush.screamEvery;
+        sfx.playScream();
+      }
+    }
     z.wobble += dt * 5;
     z.flash = Math.max(0, z.flash - dt);
     const holdPosition = z.ranged && distT < z.ranged.range * 0.85;
@@ -1097,13 +1269,7 @@ function update(dt) {
           if (a.down) continue;
           if (Math.hypot(a.x - z.x, a.y - z.y) < z.radius + a.radius + 4) {
             z.attackCooldown = 0.8;
-            a.hp -= z.damage;
-            spawnBlood(a.x, a.y, 6, '#c62828');
-            if (a.hp <= 0 && !a.down) {
-              a.down = true;
-              banner(`${a.name} IS DOWN`, 'back up at the next wave', '#ef9a9a');
-              goreKill(a.x, a.y, a.radius, null, false);
-            }
+            damageAlly(a, z.damage);
             swiped = true;
             break;
           }
@@ -1219,7 +1385,38 @@ function update(dt) {
       continue;
     }
     const dp = Math.hypot(p.x - a.x, p.y - a.y);
-    if (dp > 170) {
+    if (a.type === 'partner') {
+      // the sidekick has a mind of its own: roams and picks its own fights,
+      // unless you call it back with Q
+      a.shieldHitT = (a.shieldHitT ?? 99) + dt;
+      if (a.shieldMax && a.shield < a.shieldMax && a.shieldHitT > 3) {
+        a.shield = Math.min(a.shieldMax, a.shield + 10 * dt);
+      }
+      const called = g.time < (a.followUntil || 0);
+      if (called || dp > 1000) {
+        // recalled (or way out of range): hustle back to the player
+        if (dp > 110) {
+          a.x += ((p.x - a.x) / dp) * 240 * dt;
+          a.y += ((p.y - a.y) / dp) * 240 * dt;
+          a.walkPhase = (a.walkPhase || 0) + 240 * dt * 0.05;
+        }
+      } else {
+        a.roamT = (a.roamT || 0) - dt;
+        if (a.roamT <= 0 || !a.roamTarget) {
+          a.roamT = 5 + Math.random() * 4;
+          a.roamTarget = {
+            x: Math.max(40, Math.min(g.world.w - 40, p.x + (Math.random() - 0.5) * 1400)),
+            y: Math.max(40, Math.min(g.world.h - 40, p.y + (Math.random() - 0.5) * 1400)),
+          };
+        }
+        const dr = Math.hypot(a.roamTarget.x - a.x, a.roamTarget.y - a.y);
+        if (dr > 30) {
+          a.x += ((a.roamTarget.x - a.x) / dr) * 170 * dt;
+          a.y += ((a.roamTarget.y - a.y) / dr) * 170 * dt;
+          a.walkPhase = (a.walkPhase || 0) + 170 * dt * 0.05;
+        }
+      }
+    } else if (dp > 170) {
       a.x += ((p.x - a.x) / dp) * 200 * dt;
       a.y += ((p.y - a.y) / dp) * 200 * dt;
       a.walkPhase = (a.walkPhase || 0) + 200 * dt * 0.05;
@@ -1301,12 +1498,8 @@ function update(dt) {
     for (const a of g.allies) {
       if (a.down || s.life <= 0) continue;
       if (Math.hypot(a.x - s.x, a.y - s.y) < a.radius + 6) {
-        a.hp -= s.damage;
+        damageAlly(a, s.damage);
         s.life = 0;
-        if (a.hp <= 0 && !a.down) {
-          a.down = true;
-          banner(`${a.name} IS DOWN`, 'the medic can revive them', '#ef9a9a');
-        }
       }
     }
   }
@@ -1893,6 +2086,12 @@ function drawAlly(a) {
   ctx.fillRect(-w / 2, -a.radius - 12, w, 3);
   ctx.fillStyle = a.color;
   ctx.fillRect(-w / 2, -a.radius - 12, (w * a.hp) / a.maxHp, 3);
+  if (a.shieldMax) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(-w / 2, -a.radius - 9, w, 2);
+    ctx.fillStyle = '#40c4ff';
+    ctx.fillRect(-w / 2, -a.radius - 9, (w * a.shield) / a.shieldMax, 2);
+  }
   ctx.restore();
 }
 
@@ -2146,10 +2345,14 @@ function drawHUD() {
 
   ctx.font = 'bold 22px monospace';
   ctx.fillStyle = '#fff';
-  const ammoTxt = p.reloading > 0 ? 'RELOADING…' : `${p.mags[p.weapon]} / ${ws.magSize}`;
+  const res = p.reserve[p.weapon];
+  const ammoTxt = p.reloading > 0 ? 'RELOADING…' : `${p.mags[p.weapon]}/${ws.magSize} [${res === Infinity ? '∞' : res}]`;
   const tierTxt = ws.tier > 0 ? ` MK${ws.tier + 1}` : '';
   const favTxt = ws.favored ? '★' : '';
   ctx.fillText(`${favTxt}${ws.name}${tierTxt}  ${ammoTxt}`, canvas.width - 24, canvas.height - 70);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = '#aed581';
+  ctx.fillText(`[G] GRENADE ×${char.grenades || 0}   [H] DYNAMITE ×${char.dynamite || 0}   [Q] RECALL PARTNER`, canvas.width - 24, canvas.height - 130);
   // active loot buffs
   let bx = canvas.width - 24;
   if (game.buffs.rage > 0) {
@@ -2182,6 +2385,20 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.font = '14px monospace';
   ctx.fillText(`SCORE ${game.score}   ZOMBIES ${game.zombies.length + game.spawnQueue.length}   CIVILIANS ${game.civilians.length}`, canvas.width / 2, 46);
+  // survival countdown
+  if (game.survivalT != null) {
+    const m = Math.floor(Math.max(0, game.survivalT) / 60);
+    const s = Math.floor(Math.max(0, game.survivalT) % 60).toString().padStart(2, '0');
+    ctx.font = 'bold 34px monospace';
+    ctx.fillStyle = game.survivalT < 30 ? '#ff1744' : '#ffd54f';
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 14;
+    ctx.fillText(`SURVIVE ${m}:${s}`, canvas.width / 2, 86);
+    ctx.shadowBlur = 0;
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#ef9a9a';
+    ctx.fillText(`HORDE REMAINING: ${game.survivalPool + game.zombies.length}`, canvas.width / 2, 124);
+  }
   // frenzy warning
   if (game.time < game.frenzyUntil) {
     ctx.font = 'bold 18px monospace';
@@ -2825,6 +3042,10 @@ function drawTitle() {
 }
 
 function drawGameOver() {
+  if (hordeMode) {
+    const art = getImage('levels/horde.png');
+    if (art) drawCoverImage(art, 0.5);
+  }
   ctx.fillStyle = 'rgba(6,6,8,0.6)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const cx = canvas.width / 2;
@@ -2843,10 +3064,31 @@ function drawGameOver() {
   ctx.font = '15px monospace';
   ctx.fillStyle = '#ef9a9a';
   ctx.fillText('Half your scrap was lost. Your level and gear survive.', cx, cy + 30);
-  ctx.font = 'bold 18px monospace';
-  ctx.fillStyle = '#9e9e9e';
-  ctx.fillText('CLICK TO RETRY THE LEVEL', cx, cy + 76);
   ctx.restore();
+  // death menu: retry, deployment menu, title
+  const bw = 250, bh = 46, gap = 18;
+  const by = cy + 70;
+  const buttons3 = [
+    ['↻ RETRY', () => { if (hordeMode) startLevel(); else enterLevelIntro(); }],
+    ['☰ MAIN MENU', () => { hordeMode = false; gpFocus = 0; state = 'levelselect'; }],
+    ['⌂ TITLE', () => { hordeMode = false; state = 'title'; }],
+  ];
+  buttons3.forEach(([label, cb], i) => {
+    const x = cx - (bw * 3 + gap * 2) / 2 + i * (bw + gap);
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
+    ctx.fillStyle = 'rgba(20,24,30,0.95)';
+    ctx.fillRect(x, by, bw, bh);
+    ctx.strokeStyle = focused ? '#ffd54f' : '#546e7a';
+    ctx.lineWidth = focused ? 3 : 1;
+    ctx.strokeRect(x, by, bw, bh);
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, x + bw / 2, by + 14);
+    button(x, by, bw, bh, cb);
+  });
 }
 
 function drawVictory() {
@@ -2947,7 +3189,7 @@ function render(dt) {
     if (pk.t < 5 && Math.floor(pk.t * 6) % 2 === 0) continue;
     ctx.save();
     ctx.translate(pk.x, pk.y);
-    const colors = { medkit: '#ef5350', ammo: '#ffca28', shield: '#42a5f5', rage: '#ff7043' };
+    const colors = { medkit: '#ef5350', ammo: '#ffca28', shield: '#42a5f5', rage: '#ff7043', nade: '#9ccc65', dyna: '#ff7043' };
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(-11, -11, 22, 22);
     ctx.strokeStyle = colors[pk.type];
@@ -2964,11 +3206,36 @@ function render(dt) {
       ctx.beginPath();
       ctx.arc(0, 0, 7, 0, Math.PI * 2);
       ctx.fill();
+    } else if (pk.type === 'nade') {
+      ctx.beginPath();
+      ctx.arc(0, 1, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(-2, -9, 4, 4);
+    } else if (pk.type === 'dyna') {
+      ctx.fillRect(-7, -5, 4, 11);
+      ctx.fillRect(-2, -6, 4, 12);
+      ctx.fillRect(3, -5, 4, 11);
     } else {
       ctx.font = 'bold 14px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('!', 0, 1);
+    }
+    ctx.restore();
+  }
+  // throwables in flight, blinking as the fuse burns down
+  for (const tb of game.throwables) {
+    ctx.save();
+    ctx.translate(tb.x, tb.y);
+    const blink = tb.fuse < 0.4 && Math.floor(performance.now() / 80) % 2 === 0;
+    if (tb.kind === 'nade') {
+      ctx.fillStyle = blink ? '#fff' : '#558b2f';
+      ctx.beginPath();
+      ctx.arc(0, 0, 6, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = blink ? '#fff' : '#d84315';
+      ctx.fillRect(-6, -4, 12, 8);
     }
     ctx.restore();
   }
@@ -3085,7 +3352,7 @@ function frame(now) {
   wasGpConnected = gamepad.connected;
 
   // gamepad UI focus: d-pad browses buttons laid out last frame, A activates
-  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect';
+  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect' || state === 'gameover';
   if (uiState && uiButtons.length) {
     if (gpPressed('down') || gpPressed('right')) gpFocus = (gpFocus + 1) % uiButtons.length;
     if (gpPressed('up') || gpPressed('left')) gpFocus = (gpFocus - 1 + uiButtons.length) % uiButtons.length;
@@ -3139,14 +3406,6 @@ function frame(now) {
     if (!charSheetOpen) update(dt); // char sheet pauses the game
   } else if (state === 'shop') {
     if (wasPressed('tab') || gpPressed('start')) charSheetOpen = !charSheetOpen;
-  } else if (state === 'gameover') {
-    if (wasPressed('mouse')) {
-      if (hordeMode) {
-        hordeMode = false;
-        gpFocus = 0;
-        state = 'levelselect';
-      } else enterLevelIntro();
-    }
   } else if (state === 'victory') {
     if (wasPressed('mouse')) {
       char.campaignLevel = 0;

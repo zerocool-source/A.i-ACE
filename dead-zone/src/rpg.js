@@ -25,6 +25,8 @@ export function newCharacter() {
     gender: 'm',
     armor: 0,
     higgsBatteries: 0,
+    grenades: 3,
+    dynamite: 1,
     campaignLevel: 0, // index into LEVELS
     maxCampaign: 0, // highest level unlocked (for level select)
     totalKills: 0,
@@ -104,6 +106,7 @@ export function shopCatalog(char, playerHp) {
       minigun: 'Bullet hose — 120-round drum [6]',
       flak: 'Wall of shrapnel — 12 pellets per blast [7]',
       railgun: 'Pierces an entire horde in a straight line [8]',
+      sniper: 'One shot, five kills, across the whole map [9]',
     };
     items.push({
       id: 'buy-' + w,
@@ -141,6 +144,22 @@ export function shopCatalog(char, playerHp) {
     cost: 150,
     maxed: char.higgsBatteries >= MAX_BATTERIES,
     buy: (c) => c.higgsBatteries++,
+  });
+  items.push({
+    id: 'nades',
+    name: 'GRENADES x3',
+    desc: 'Throw with [G] — 110px blast',
+    cost: 120,
+    maxed: char.grenades >= 12,
+    buy: (c) => (c.grenades = (c.grenades || 0) + 3),
+  });
+  items.push({
+    id: 'dyna',
+    name: 'DYNAMITE x2',
+    desc: 'Throw with [H] — huge 180px blast',
+    cost: 200,
+    maxed: char.dynamite >= 8,
+    buy: (c) => (c.dynamite = (c.dynamite || 0) + 2),
   });
   items.push({
     id: 'medkit',

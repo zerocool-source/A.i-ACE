@@ -44,6 +44,38 @@ export const ZOMBIE_TYPES = {
     ranged: { range: 460, interval: 1.1, shotSpeed: 950, bullet: true },
     human: true,
   },
+  granny: {
+    // ambusher: lurks beside buildings, then sprints at you screaming
+    hp: 200, speed: 165, damage: 14, radius: 13, score: 40,
+    color: '#d7ccc8', glow: 'rgba(215,204,200,0.5)',
+    ambush: { triggerRange: 380, screamEvery: 2 },
+  },
+  cop: {
+    // zombie cop: still has the service pistol, still pulls the trigger
+    hp: 150, speed: 60, damage: 13, radius: 15, score: 45,
+    color: '#5c6bc0', glow: 'rgba(92,107,192,0.45)',
+    ranged: { range: 420, interval: 1.7, shotSpeed: 800, bullet: true },
+  },
+  hazmat: {
+    // bloated suit full of ooze — pops like an exploder, but much bigger
+    hp: 240, speed: 40, damage: 30, radius: 18, score: 50,
+    color: '#fdd835', glow: 'rgba(253,216,53,0.5)',
+    explodes: { radius: 130 },
+  },
+  butcher: {
+    hp: 420, speed: 72, damage: 32, radius: 22, score: 70,
+    color: '#b71c1c', glow: 'rgba(183,28,28,0.55)',
+  },
+  dog: {
+    hp: 40, speed: 205, damage: 9, radius: 8, score: 18,
+    color: '#8d6e63', glow: 'rgba(141,110,99,0.4)',
+    lunges: true,
+  },
+  stalker: {
+    hp: 120, speed: 120, damage: 18, radius: 12, score: 35,
+    color: '#90caf9', glow: 'rgba(144,202,249,0.4)',
+    lunges: true,
+  },
 };
 
 export function waveComposition(wave) {
@@ -91,5 +123,24 @@ export function spawnZombie(type, w, h) {
     lunges: def.lunges || false,
     screams: def.screams || null,
     human: def.human || false,
+    ambush: def.ambush || null,
+    lurking: !!def.ambush, // grannies wait until you're close
   };
+}
+
+// weighted random picks for big mixed drops
+const MIX = [
+  ['walker', 38], ['runner', 18], ['crawler', 10], ['dog', 8], ['stalker', 6],
+  ['brute', 5], ['spitter', 4], ['cop', 4], ['granny', 3], ['hazmat', 2],
+  ['butcher', 2], ['exploder', 3], ['screamer', 1],
+];
+const MIX_TOTAL = MIX.reduce((s, [, w]) => s + w, 0);
+
+export function randomZombieType() {
+  let r = Math.random() * MIX_TOTAL;
+  for (const [t, w] of MIX) {
+    r -= w;
+    if (r <= 0) return t;
+  }
+  return 'walker';
 }
