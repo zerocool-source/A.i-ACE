@@ -2788,14 +2788,23 @@ function drawTitle() {
     ctx.textBaseline = 'top';
     ctx.font = '15px monospace';
     ctx.fillStyle = '#cfcfcf';
-    ctx.fillText('WASD/LS move · mouse/RS aim · 1-6 weapons · R reload · E higgs · TAB character · 🎮 Xbox supported', cx, canvas.height - 140);
+    ctx.fillText('WASD/LS move · mouse/RS aim · 1-8 weapons · R reload · SPACE dash · E higgs · TAB character', cx, canvas.height - 152);
+    // live controller status so USB/Bluetooth detection is visible at a glance
+    ctx.font = 'bold 13px monospace';
+    if (gamepad.connected) {
+      ctx.fillStyle = '#69f0ae';
+      ctx.fillText(`🎮 CONNECTED: ${gamepad.id.slice(0, 60)}${gamepad.standard ? '' : ' (non-standard layout — fallback controls)'}`, cx, canvas.height - 128);
+    } else {
+      ctx.fillStyle = '#9e9e9e';
+      ctx.fillText('🎮 no controller detected — plug in USB or pair Bluetooth, then PRESS ANY BUTTON on the pad', cx, canvas.height - 128);
+    }
     ctx.font = 'bold 24px monospace';
     ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.4 * Math.sin(t * 3)})`;
-    ctx.fillText(hasSave ? `CLICK TO CONTINUE — LV ${char.level}, ${level().name}` : 'CLICK TO ENTER', cx, canvas.height - 100);
+    ctx.fillText(hasSave ? `CLICK TO CONTINUE — LV ${char.level}, ${level().name}` : 'CLICK TO ENTER', cx, canvas.height - 98);
     if (hasSave) {
       ctx.font = '13px monospace';
       ctx.fillStyle = '#9e9e9e';
-      ctx.fillText('[N] new campaign (wipes save)', cx, canvas.height - 60);
+      ctx.fillText('[N] new campaign (wipes save)', cx, canvas.height - 58);
     }
     ctx.restore();
     return;
