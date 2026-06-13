@@ -95,38 +95,38 @@ export const ZOMBIE_TYPES = {
 
   // ---- THE MACHINES (wave-3 robot threat) --------------------------------
   bot_breacher: {
-    label: 'BREACHER UNIT', hp: 160, speed: 70, damage: 14, radius: 16, score: 25,
+    label: 'BREACHER UNIT', hp: 160, speed: 50, damage: 14, radius: 16, score: 25,
     color: '#69f0ae', glow: 'rgba(105,240,174,0.5)',
   },
   bot_scout: {
-    label: 'SCOUT UNIT', hp: 70, speed: 185, damage: 10, radius: 12, score: 25,
+    label: 'SCOUT UNIT', hp: 70, speed: 133, damage: 10, radius: 12, score: 25,
     color: '#ffab40', glow: 'rgba(255,171,64,0.5)', lunges: true,
   },
   bot_juggernaut: {
-    label: 'JUGGERNAUT', hp: 650, speed: 36, damage: 30, radius: 26, score: 80,
+    label: 'JUGGERNAUT', hp: 650, speed: 29, damage: 30, radius: 26, score: 80,
     color: '#ff5252', glow: 'rgba(255,82,82,0.55)',
   },
   bot_kamikaze: {
-    label: 'KAMIKAZE BOT', hp: 60, speed: 150, damage: 50, radius: 13, score: 35,
+    label: 'KAMIKAZE BOT', hp: 60, speed: 112, damage: 50, radius: 13, score: 35,
     color: '#ff7043', glow: 'rgba(255,112,67,0.6)', explodes: { radius: 110 },
   },
   bot_marksman: {
-    label: 'MARKSMAN UNIT', hp: 140, speed: 55, damage: 20, radius: 13, score: 60,
+    label: 'MARKSMAN UNIT', hp: 140, speed: 44, damage: 20, radius: 13, score: 60,
     color: '#b0bec5', glow: 'rgba(128,216,255,0.4)',
     ranged: { range: 520, interval: 1.6, shotSpeed: 1100, bullet: true },
   },
   bot_enforcer: {
-    label: 'ENFORCER UNIT', hp: 220, speed: 62, damage: 16, radius: 15, score: 50,
+    label: 'ENFORCER UNIT', hp: 220, speed: 46, damage: 16, radius: 15, score: 50,
     color: '#5c6bc0', glow: 'rgba(92,107,192,0.5)',
     ranged: { range: 430, interval: 1.4, shotSpeed: 900, bullet: true },
   },
   bot_overseer: {
-    label: 'OVERSEER', hp: 180, speed: 48, damage: 8, radius: 15, score: 70,
+    label: 'OVERSEER', hp: 180, speed: 38, damage: 8, radius: 15, score: 70,
     color: '#e0e0e0', glow: 'rgba(224,224,224,0.55)',
     screams: { radius: 380, interval: 5, boost: 3 }, // overclock aura
   },
   bot_warframe: {
-    label: 'WARFRAME', hp: 4000, speed: 45, damage: 38, radius: 42, score: 600,
+    label: 'WARFRAME', hp: 4000, speed: 35, damage: 38, radius: 42, score: 600,
     color: '#b388ff', glow: 'rgba(179,136,255,0.6)',
   },
 };

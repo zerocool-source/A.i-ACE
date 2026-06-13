@@ -15,7 +15,8 @@ export const UPSCALE_MODES = [
   { id: 'ultra', name: 'ULTRA PERFORMANCE', scale: 0.33, desc: '3x upscale — weakest hardware' },
 ];
 
-export const settings = { upscale: 'off', sharpen: true };
+// arcade: neon bloom trails, scanline grade, amped shake/flash — pure over-the-top
+export const settings = { upscale: 'off', sharpen: true, arcade: true };
 try {
   Object.assign(settings, JSON.parse(localStorage.getItem(KEY) || '{}'));
 } catch {

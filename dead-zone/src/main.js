@@ -123,6 +123,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'paratrooper', 'hackchip',
                     'nade_frag', 'nade_smoke', 'nade_decoy', 'nade_dyna',
                     'wic_rifle', 'wic_shotgun', 'wic_railgun',
+                    'lootcrate', 'barrier_scifi', 'pylon',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -275,7 +276,20 @@ function bark(text) {
 let hitStopT = 0; // micro freeze-frames on big kills
 
 function addShake(n) {
-  shake = Math.min(24, shake + n);
+  shake = Math.min(34, shake + n * (settings.arcade ? 1.5 : 1));
+}
+
+// cached scanline strip for the arcade CRT grade (built once, tiled cheaply)
+let scanlineCanvas = null;
+function scanlines() {
+  if (scanlineCanvas) return scanlineCanvas;
+  const c = document.createElement('canvas');
+  c.width = 4; c.height = 4;
+  const cc = c.getContext('2d');
+  cc.fillStyle = 'rgba(0,0,0,0.10)';
+  cc.fillRect(0, 0, 4, 2);
+  scanlineCanvas = c;
+  return c;
 }
 
 function enterLevelIntro() {
@@ -2529,15 +2543,25 @@ function update(dt) {
         saveCharacter(char);
         g.props.splice(i, 1); // the door swings open
         sfx.playPurchase();
-        banner('DOOR UNLOCKED', 'something useful inside', '#ffd54f');
-        // interior loot
-        for (let k = 0; k < 3; k++) {
+        banner('STASH BREACHED', 'jackpot inside', '#ffd54f');
+        // RICH interior loot: a burst of scrap, multiple pickups, a cache,
+        // and a chance at a free weapon cache the deeper the level
+        for (let k = 0; k < 6; k++) {
           const a = Math.random() * Math.PI * 2;
-          g.scraps.push({ x: pr.lootX, y: pr.lootY, vx: Math.cos(a) * 100, vy: Math.sin(a) * 100, amount: 15 + Math.floor(Math.random() * 25) });
+          g.scraps.push({ x: pr.lootX, y: pr.lootY, vx: Math.cos(a) * (60 + Math.random() * 110), vy: Math.sin(a) * (60 + Math.random() * 110), amount: 20 + Math.floor(Math.random() * 35) });
         }
-        dropLoot(pr.lootX + 24, pr.lootY, true);
-        dropLoot(pr.lootX - 24, pr.lootY, true);
-        if (Math.random() < 0.25) g.caches.push({ x: pr.lootX, y: pr.lootY + 30, radius: 16, taken: false, pulse: 0 });
+        dropLoot(pr.lootX + 26, pr.lootY, true);
+        dropLoot(pr.lootX - 26, pr.lootY, true);
+        dropLoot(pr.lootX, pr.lootY - 26, true);
+        g.caches.push({ x: pr.lootX, y: pr.lootY + 30, radius: 16, taken: false, pulse: 0 });
+        const lacks = ['flamer', 'minigun', 'railgun', 'sniper'].filter((w3) => !char.ownedWeapons.includes(w3));
+        if (lacks.length && Math.random() < 0.3 + char.campaignLevel * 0.05) {
+          const w3 = lacks[Math.floor(Math.random() * lacks.length)];
+          char.ownedWeapons.push(w3);
+          p.mags[w3] = weaponStats(char, w3).magSize;
+          p.reserve[w3] = AMMO_RESERVE[w3];
+          banner('WEAPON IN THE STASH', `${WEAPONS[w3].name} UNLOCKED`, '#ffd54f');
+        }
       } else {
         sfx.playDenied();
         g.dmgNumbers.push({ x: p.x, y: p.y - 24, txt: `NEED ⚙${pr.cost}`, color: '#ef5350', life: 1, vy: -40 });
@@ -3373,6 +3397,21 @@ function drawZombie(z) {
     ctx.arc(0, 0, z.radius, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (z.type && z.type.startsWith('bot_')) {
+    // mechanical optic: a hot core pulse the player can track in a swarm
+    const op = 0.55 + 0.45 * Math.sin(performance.now() / 180 + z.wobble * 3);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const og = ctx.createRadialGradient(0, 0, 0, 0, 0, z.radius * 0.9);
+    og.addColorStop(0, z.color);
+    og.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalAlpha = op * 0.8;
+    ctx.fillStyle = og;
+    ctx.beginPath();
+    ctx.arc(0, 0, z.radius * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
   if (z.burnUntil && game.time < z.burnUntil && SPRITES.fire) {
     const fl = 0.85 + 0.3 * Math.sin(performance.now() / 55 + z.wobble * 9);
     ctx.globalAlpha = 0.85;
@@ -3602,7 +3641,7 @@ function drawPlayer() {
     } else if (SPRITES.muzzle) {
       ctx.save();
       ctx.translate(p.radius + 24, 0);
-      drawSpriteFit(SPRITES.muzzle, 34, 24);
+      drawSpriteFit(SPRITES.muzzle, settings.arcade ? 52 : 34, settings.arcade ? 36 : 24);
       ctx.restore();
     } else {
       ctx.fillStyle = '#ffe082';
@@ -3682,7 +3721,7 @@ function drawCaches() {
     if (SPRITES.cache) {
       ctx.save();
       ctx.translate(ca.x, ca.y);
-      drawSpriteFit(SPRITES.cache, 44, 44);
+      drawSpriteFit(SPRITES.lootcrate || SPRITES.cache, 48, 48);
       ctx.restore();
     } else {
       ctx.fillStyle = '#8d6e2f';
@@ -4966,6 +5005,20 @@ function drawVideoSettings() {
     saveSettings();
     resize();
   });
+  by += 38;
+  const arOn = settings.arcade;
+  ctx.fillStyle = arOn ? 'rgba(82,60,30,0.95)' : 'rgba(26,32,40,0.95)';
+  ctx.fillRect(px + 24, by, pw - 48, 32);
+  ctx.strokeStyle = arOn ? '#ffab40' : '#37474f';
+  ctx.strokeRect(px + 24, by, pw - 48, 32);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = arOn ? '#ffab40' : '#9e9e9e';
+  ctx.textAlign = 'center';
+  ctx.fillText(`ARCADE MODE: ${arOn ? 'ON' : 'OFF'} (neon trails, scanlines, extra juice)`, px + pw / 2, by + 9);
+  button(px + 24, by, pw - 48, 32, () => {
+    settings.arcade = !settings.arcade;
+    saveSettings();
+  });
   by += 42;
   ctx.font = '11px monospace';
   ctx.fillStyle = '#607d8b';
@@ -5151,13 +5204,27 @@ function render(dt) {
     if (z.x < cam.x - 120 || z.x > cam.x + view.w + 120 || z.y < cam.y - 120 || z.y > cam.y + view.h + 120) continue;
     drawZombie(z);
   }
-  for (const b of game.bullets) {
-    ctx.strokeStyle = b.color;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(b.x, b.y);
-    ctx.lineTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012);
-    ctx.stroke();
+  if (settings.arcade) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const b of game.bullets) {
+      const tx = b.x - b.vx * 0.02, ty = b.y - b.vy * 0.02;
+      ctx.strokeStyle = b.color;
+      ctx.globalAlpha = 0.35; ctx.lineWidth = 9; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.globalAlpha = 1; ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff';
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 0.01, b.y - b.vy * 0.01); ctx.stroke();
+    }
+    ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+    ctx.globalCompositeOperation = 'source-over';
+  } else {
+    for (const b of game.bullets) {
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y);
+      ctx.lineTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012);
+      ctx.stroke();
+    }
   }
   // spitter acid / rogue rifle fire
   for (const s of game.enemyShots) {
@@ -5496,6 +5563,20 @@ function render(dt) {
     vg.addColorStop(1, 'rgba(0,0,0,0.34)');
     ctx.fillStyle = vg;
     ctx.fillRect(0, 0, view.w, view.h);
+  }
+  if (settings.arcade) {
+    // CRT scanline overlay + a hotter combo-driven vignette pulse
+    const pat = ctx.createPattern(scanlines(), 'repeat');
+    ctx.fillStyle = pat;
+    ctx.fillRect(0, 0, view.w, view.h);
+    if (game.combo >= 10) {
+      const cv = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.34, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.72);
+      const hot = Math.min(0.4, game.combo * 0.006);
+      cv.addColorStop(0, 'rgba(0,0,0,0)');
+      cv.addColorStop(1, `rgba(255,140,40,${hot})`);
+      ctx.fillStyle = cv;
+      ctx.fillRect(0, 0, view.w, view.h);
+    }
   }
   if (game.nukeFlash > 0) {
     ctx.fillStyle = `rgba(255,255,255,${Math.min(0.95, game.nukeFlash)})`;
