@@ -121,6 +121,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'bot_breacher', 'bot_scout', 'bot_juggernaut', 'bot_kamikaze',
                     'bot_marksman', 'bot_enforcer', 'bot_overseer', 'bot_warframe',
                     'paratrooper', 'hackchip',
+                    'nade_frag', 'nade_smoke', 'nade_decoy', 'nade_dyna',
+                    'wic_rifle', 'wic_shotgun', 'wic_railgun',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -1681,6 +1683,7 @@ function update(dt) {
       x: p.x, y: p.y,
       vx: Math.cos(p.angle) * speed, vy: Math.sin(p.angle) * speed,
       fuse: kind === 'nade' ? 0.9 : 1.5, kind,
+      rot: 0, spin: (Math.random() < 0.5 ? -1 : 1) * (10 + Math.random() * 8),
     });
     sfx.playEmptyClick();
     saveCharacter(char);
@@ -1703,6 +1706,7 @@ function update(dt) {
     tb.y += tb.vy * dt;
     tb.vx *= 0.93;
     tb.vy *= 0.93;
+    tb.rot = (tb.rot || 0) + (tb.spin || 12) * dt;
     tb.fuse -= dt;
     if (tb.fuse <= 0) {
       if (tb.kind === 'frag') explode(tb.x, tb.y, 110, 170, false);
@@ -3891,10 +3895,46 @@ function drawHUD() {
   const tierTxt = ws.tier > 0 ? ` MK${ws.tier + 1}` : '';
   const favTxt = ws.favored ? '★' : '';
   ctx.fillText(`${favTxt}${ws.name}${tierTxt}  ${ammoTxt}`, view.w - 24, view.h - 70);
-  ctx.font = 'bold 13px monospace';
-  ctx.fillStyle = '#aed581';
-  const ns = game.nadeSel.toUpperCase();
-  ctx.fillText(`[G] ${ns} ×${char.nades[game.nadeSel] || 0} ([T] cycle)   [H] DYNAMITE ×${char.dynamite || 0}   [Q] RECALL`, view.w - 24, view.h - 130);
+  // throwable tray: icon cells with live counts, selected one ringed
+  const tray = [
+    { key: 'frag', sp: 'nade_frag', n: char.nades.frag || 0, sel: game.nadeSel === 'frag' },
+    { key: 'smoke', sp: 'nade_smoke', n: char.nades.smoke || 0, sel: game.nadeSel === 'smoke' },
+    { key: 'decoy', sp: 'nade_decoy', n: char.nades.decoy || 0, sel: game.nadeSel === 'decoy' },
+    { key: 'dyna', sp: 'nade_dyna', n: char.dynamite || 0, sel: false },
+  ];
+  const cellW = 46, cellH = 44, trayY = view.h - 138;
+  let tx = view.w - 24 - tray.length * (cellW + 4) + cellW;
+  for (const it of tray) {
+    const cx0 = tx - cellW;
+    ctx.fillStyle = it.sel ? 'rgba(120,216,140,0.18)' : 'rgba(8,12,16,0.7)';
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(cx0, trayY, cellW, cellH, 6); ctx.fill(); }
+    else ctx.fillRect(cx0, trayY, cellW, cellH);
+    ctx.strokeStyle = it.sel ? '#aed581' : it.n > 0 ? '#546e7a' : '#37474f';
+    ctx.lineWidth = it.sel ? 2 : 1;
+    ctx.stroke();
+    const sp = SPRITES[it.sp];
+    ctx.globalAlpha = it.n > 0 ? 1 : 0.32;
+    if (sp) {
+      ctx.save();
+      ctx.translate(cx0 + cellW / 2, trayY + 17);
+      drawSpriteFit(sp, 26, 26);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.font = 'bold 12px monospace';
+    ctx.fillStyle = it.n > 0 ? '#fff' : '#616161';
+    ctx.textAlign = 'right';
+    ctx.fillText(`×${it.n}`, cx0 + cellW - 5, trayY + cellH - 15);
+    ctx.font = '8px monospace';
+    ctx.fillStyle = it.key === 'dyna' ? '#ff8a65' : '#90a4ae';
+    ctx.textAlign = 'center';
+    ctx.fillText(it.key === 'dyna' ? '[H]' : it.sel ? '[G]' : '', cx0 + cellW / 2, trayY + cellH - 11);
+    tx -= cellW + 4;
+  }
+  ctx.textAlign = 'right';
+  ctx.font = '9px monospace';
+  ctx.fillStyle = '#607d8b';
+  ctx.fillText('[T] cycle · [Q] recall', view.w - 24, trayY - 12);
   if (game.streak >= 5) {
     ctx.font = 'bold 15px monospace';
     ctx.fillStyle = '#ffd54f';
@@ -5218,19 +5258,35 @@ function render(dt) {
     ctx.arc(game.decoy.x, game.decoy.y, 18 + Math.sin(performance.now() / 150) * 4, 0, Math.PI * 2);
     ctx.stroke();
   }
-  // throwables in flight, blinking as the fuse burns down
+  // throwables in flight: spin, drop shadow, arming-glow pulse near detonation
+  const NADE_SPRITE = { frag: 'nade_frag', smoke: 'nade_smoke', decoy: 'nade_decoy', dyna: 'nade_dyna' };
+  const NADE_GLOW = { frag: '255,82,82', smoke: '176,190,197', decoy: '38,198,218', dyna: '255,112,67' };
   for (const tb of game.throwables) {
     ctx.save();
     ctx.translate(tb.x, tb.y);
-    const blink = tb.fuse < 0.4 && Math.floor(performance.now() / 80) % 2 === 0;
-    if (tb.kind === 'frag' || tb.kind === 'smoke' || tb.kind === 'decoy') {
-      ctx.fillStyle = blink ? '#fff' : tb.kind === 'frag' ? '#558b2f' : tb.kind === 'smoke' ? '#90a4ae' : '#ffd54f';
+    // shadow under the arc
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(2, 4, 8, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // arming glow swells as the fuse runs out
+    const armP = 1 - Math.min(1, tb.fuse / 1.2);
+    const glow = NADE_GLOW[tb.kind] || '255,82,82';
+    const pulse = 0.4 + armP * (0.6 + 0.4 * Math.sin(performance.now() / 60));
+    const gr = ctx.createRadialGradient(0, 0, 2, 0, 0, 16 + armP * 10);
+    gr.addColorStop(0, `rgba(${glow},${pulse * 0.7})`);
+    gr.addColorStop(1, `rgba(${glow},0)`);
+    ctx.fillStyle = gr;
+    ctx.fillRect(-26, -26, 52, 52);
+    const sp = SPRITES[NADE_SPRITE[tb.kind]];
+    if (sp) {
+      ctx.rotate(tb.rot || 0);
+      drawSpriteFit(sp, 22, 22);
+    } else {
+      ctx.fillStyle = tb.kind === 'frag' ? '#558b2f' : tb.kind === 'smoke' ? '#90a4ae' : tb.kind === 'decoy' ? '#26c6da' : '#d84315';
       ctx.beginPath();
       ctx.arc(0, 0, 6, 0, Math.PI * 2);
       ctx.fill();
-    } else {
-      ctx.fillStyle = blink ? '#fff' : '#d84315';
-      ctx.fillRect(-6, -4, 12, 8);
     }
     ctx.restore();
   }
