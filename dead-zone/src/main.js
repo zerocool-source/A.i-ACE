@@ -1615,6 +1615,30 @@ function update(dt) {
   if (gpPressed('lb')) cycleWeapon(-1);
   if (gpPressed('rb')) cycleWeapon(1);
 
+  // -- WEAPON WHEEL: hold right-mouse to fan out owned guns, aim to a slot,
+  // release to equip. Firing is suppressed while the wheel is open.
+  const owned = ownedList();
+  g.wheelOpen = input.mouse.right && owned.length > 1;
+  if (g.wheelOpen) {
+    const dx = input.mouse.x - view.w / 2;
+    const dy = input.mouse.y - view.h / 2;
+    if (Math.hypot(dx, dy) > 26) {
+      // top slot = -90°; slots fan clockwise
+      let ang = Math.atan2(dy, dx) + Math.PI / 2;
+      if (ang < 0) ang += Math.PI * 2;
+      g.wheelPick = Math.round(ang / (Math.PI * 2 / owned.length)) % owned.length;
+    }
+  } else if (wasPressed('wheel-release') && g.wheelPick != null) {
+    const w = owned[g.wheelPick];
+    if (w && p.weapon !== w) {
+      p.weapon = w;
+      p.reloading = 0;
+      p.fireCooldown = Math.max(p.fireCooldown, 0.15);
+      sfx.playReload();
+    }
+    g.wheelPick = null;
+  }
+
   // -- reload
   const ws = weaponStats(char, p.weapon);
   if (p.reloading > 0) {
@@ -1634,7 +1658,7 @@ function update(dt) {
   // -- shooting (mouse or RT)
   p.fireCooldown = Math.max(0, p.fireCooldown - dt);
   p.muzzleFlash = Math.max(0, p.muzzleFlash - dt);
-  const holdFire = input.mouse.down || gamepad.fire;
+  const holdFire = (input.mouse.down || gamepad.fire) && !game.wheelOpen;
   const tapFire = wasPressed('mouse') || gpPressed('rt-tap'); // rt edge handled via holdFire for autos
   const wantsFire = ws.auto ? holdFire : (tapFire || (gamepad.fire && p.fireCooldown === 0 && !p._rtHeld));
   p._rtHeld = gamepad.fire;
@@ -3869,6 +3893,70 @@ function drawMinimap() {
   ctx.restore();
 }
 
+// radial gun selector: a fan of owned-weapon slots around screen centre,
+// the aimed slot lit up; release right-mouse to equip it
+const WEAPON_ICON = { rifle: 'wic_rifle', shotgun: 'wic_shotgun', railgun: 'wic_railgun' };
+function drawWeaponWheel() {
+  const owned = ownedList();
+  const cx = view.w / 2, cy = view.h / 2;
+  const R = Math.min(220, view.h * 0.32);
+  ctx.save();
+  // dim the field so the wheel pops
+  ctx.fillStyle = 'rgba(4,6,9,0.55)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  owned.forEach((w, i) => {
+    const ang = -Math.PI / 2 + i * (Math.PI * 2 / owned.length);
+    const x = cx + Math.cos(ang) * R;
+    const y = cy + Math.sin(ang) * R;
+    const sel = i === game.wheelPick;
+    const cur = w === game.player.weapon;
+    ctx.beginPath();
+    ctx.arc(x, y, sel ? 46 : 38, 0, Math.PI * 2);
+    ctx.fillStyle = sel ? 'rgba(255,171,64,0.28)' : 'rgba(10,14,18,0.85)';
+    ctx.fill();
+    ctx.lineWidth = sel ? 3 : 1.5;
+    ctx.strokeStyle = sel ? '#ffab40' : cur ? '#80cbc4' : '#546e7a';
+    ctx.stroke();
+    const icon = SPRITES[WEAPON_ICON[w]];
+    if (icon) {
+      ctx.save();
+      ctx.translate(x, y - 6);
+      drawSpriteFit(icon, 52, 34);
+      ctx.restore();
+    }
+    ctx.font = 'bold 11px monospace';
+    ctx.fillStyle = sel ? '#fff' : '#b0bec5';
+    ctx.fillText(WEAPONS[w].name, x, y + 24);
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#78909c';
+    ctx.fillText(`[${WEAPONS[w].key.toUpperCase()}]`, x, y + 36);
+  });
+  // hub
+  ctx.beginPath();
+  ctx.arc(cx, cy, 30, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(10,14,18,0.9)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffab40';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#ffab40';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText('SWAP', cx, cy);
+  // pointer to the aimed slot
+  if (game.wheelPick != null) {
+    const a2 = -Math.PI / 2 + game.wheelPick * (Math.PI * 2 / owned.length);
+    ctx.strokeStyle = '#ffab40';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a2) * 32, cy + Math.sin(a2) * 32);
+    ctx.lineTo(cx + Math.cos(a2) * (R - 48), cy + Math.sin(a2) * (R - 48));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawHUD() {
   const p = game.player;
   const d = derived(char);
@@ -5608,6 +5696,7 @@ function render(dt) {
   }
   drawScreenBlood();
   drawHUD();
+  if (game.wheelOpen) drawWeaponWheel();
   // KILL MODE cut-in: the hero's portrait rides a slash streak across screen
   if (game.cutin) {
     const ci = game.cutin;

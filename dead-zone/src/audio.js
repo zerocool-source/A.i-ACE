@@ -463,3 +463,32 @@ export async function startMusic() {
   if (playlist) playNextTrack();
   else startAmbientLoop();
 }
+
+// WebAudio unlock: browsers only let an AudioContext leave the "suspended"
+// state from inside a REAL user-gesture handler. The game processes its
+// clicks inside requestAnimationFrame, which does NOT count — so without
+// this, resume() silently fails and nothing ever plays. A one-time genuine
+// DOM listener guarantees the context wakes up (and kicks off the music).
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  const c = ac();
+  if (c.state === 'suspended') c.resume();
+  // a one-sample silent blip primes the graph on iOS/Safari
+  try {
+    const b = c.createBufferSource();
+    b.buffer = c.createBuffer(1, 1, c.sampleRate);
+    b.connect(master);
+    b.start(0);
+  } catch { /* already running */ }
+  startMusic();
+  for (const ev of ['pointerdown', 'keydown', 'touchstart', 'mousedown']) {
+    window.removeEventListener(ev, unlockAudio);
+  }
+}
+if (typeof window !== 'undefined') {
+  for (const ev of ['pointerdown', 'keydown', 'touchstart', 'mousedown']) {
+    window.addEventListener(ev, unlockAudio, { passive: true });
+  }
+}
