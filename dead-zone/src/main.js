@@ -2147,7 +2147,10 @@ function update(dt) {
       z.y += ((target.y - z.y) / distT) * spdZ * dt;
       z.x += Math.cos(z.wobble) * 8 * dt;
       z.y += Math.sin(z.wobble * 1.3) * 8 * dt;
+      z.walking = spdZ; // remember it moved this frame
+      z.animDist = (z.animDist || 0) + spdZ * dt;
     }
+    if (!(distT > 1 && !holdPosition)) z.walking = 0;
     collideProps(z);
     // screamer: shriek hastes every zombie around it
     if (z.screams) {
@@ -3479,13 +3482,27 @@ function drawZombie(z) {
   }
   const { t: target } = zombieTarget(z);
   const a = Math.atan2(target.y - z.y, target.x - z.x);
-  const sprite = SPRITES[z.type]; // gore variants retired: all art is now true top-down
+  // real walk cycle: a 4-pose sheet if the type has one, stepping by distance
+  const zaf = animFrames(z.type);
+  let sprite = SPRITES[z.type];
+  const moving = (z.walking || 0) > 4;
+  if (zaf && moving) {
+    const ph = Math.floor((z.animDist || 0) / 20) % 4;
+    sprite = zaf.cycleWalk[ph];
+  } else if (zaf) {
+    sprite = zaf.idle;
+  }
   if (sprite) {
     ctx.save();
     const rear = z.windup ? -0.3 * Math.sin((0.33 - z.windup) / 0.33 * Math.PI) : 0;
-    ctx.rotate(a + Math.sin(z.wobble * 2) * 0.09 + rear);
-    const zsq = Math.sin(z.wobble * 4) * 0.04;
-    const wScale = z.windup ? 1.12 : 1;
+    // lurching walk: a side-to-side waddle + a plodding step-bob, both driven
+    // by how far it's actually travelled so it truly reads as WALKING
+    const step = (z.animDist || 0) * 0.09;
+    const waddle = moving ? Math.sin(step) * 0.12 : Math.sin(z.wobble * 2) * 0.04;
+    const bob = moving ? 1 + Math.abs(Math.sin(step)) * 0.09 : 1;
+    ctx.rotate(a + waddle + rear);
+    const zsq = Math.sin(step * 2) * (moving ? 0.06 : 0.03);
+    const wScale = (z.windup ? 1.12 : 1) * bob;
     ctx.scale((1 + zsq) * wScale, (1 - zsq) * wScale);
     drawSprite(sprite, z.radius * 3.2);
     ctx.restore();
