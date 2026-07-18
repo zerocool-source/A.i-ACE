@@ -124,6 +124,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'nade_frag', 'nade_smoke', 'nade_decoy', 'nade_dyna',
                     'wic_rifle', 'wic_shotgun', 'wic_railgun',
                     'lootcrate', 'barrier_scifi', 'pylon',
+                    'explosion_hd', 'fighterjet', 'slash_fx', 'bloodburst',
+                    'neon_kiosk',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -247,6 +249,7 @@ if (!char) char = newCharacter();
 let game = null;
 let charSheetOpen = false;
 let videoOpen = false; // VIDEO / upscaling panel on the title screen
+let paused = false; // in-game pause menu
 let banners = []; // {text, sub, t, color}
 let briefingStart = 0; // typewriter clock for the level-intro story text
 let screenBlood = []; // splatter stuck to the camera: {fx, fy, r, alpha}
@@ -515,6 +518,7 @@ function placeProps(lv, world) {
       scatter(6, 64, 80, 32, 40, 'car');
       scatter(2, 36, 48, 36, 48, 'crate', true);
       scatter(1 / af, 140, 170, 140, 170, 'tent'); // abandoned triage post
+      scatter(4, 34, 46, 34, 46, 'neon', true); // glowing street kiosks
       break;
     case 'graveyard':
       edgeBlocks(4, 'crypt', 180, 130);
@@ -1271,7 +1275,7 @@ function addScreenBlood(intensity = 1) {
 function explode(x, y, radius, damage, hurtsPlayer) {
   const g = game;
   const killsBefore = g.kills;
-  g.explosions.push({ x, y, r: radius, t: 0.45 });
+  g.explosions.push({ x, y, r: radius, t: 0.45, seed: Math.random() * 6.28 });
   rumble(0.45, 0.8, 130);
   if (SPRITES.scorch) {
     decalCtx.save();
@@ -2534,7 +2538,7 @@ function update(dt) {
       g.bombers.push({
         x: p.x - dir2 * 950, y: p.y + (Math.random() - 0.5) * 360,
         vx: dir2 * (700 + Math.random() * 200),
-        dropT: 0.5, drops: strafing ? 3 : 0, life: 2.9, sp: 'gunship',
+        dropT: 0.5, drops: strafing ? 3 : 0, life: 2.9, sp: SPRITES.fighterjet ? 'fighterjet' : 'gunship',
       });
       if (strafing) {
         banner('GUNSHIP ON STATION', 'danger close — strafing run', '#80cbc4');
@@ -3132,7 +3136,10 @@ const SPRITE_PROPS = new Set([
   'corpsepile', 'ambulance', 'vending',
   'fountain', 'kiosk', 'traincar', 'watchtower', 'container', 'crane',
   'helipad', 'acunit', 'mausoleum', 'tank', 'tent', 'sewergrate', 'waterpool',
+  'neon',
 ]);
+// prop-kind -> sprite override (defaults to SPRITES[kind])
+const PROP_SPRITE = { neon: 'neon_kiosk' };
 
 function drawProps() {
   for (const pr of game.props) {
@@ -3178,7 +3185,7 @@ function drawProps() {
         ctx.textBaseline = 'top';
       }
     } else if (SPRITE_PROPS.has(pr.kind)) {
-      const sp = SPRITES[pr.kind];
+      const sp = SPRITES[PROP_SPRITE[pr.kind] || pr.kind];
       if (sp) {
         ctx.save();
         ctx.translate(pr.x + pr.w / 2, pr.y + pr.h / 2);
@@ -3896,6 +3903,66 @@ function drawMinimap() {
 // radial gun selector: a fan of owned-weapon slots around screen centre,
 // the aimed slot lit up; release right-mouse to equip it
 const WEAPON_ICON = { rifle: 'wic_rifle', shotgun: 'wic_shotgun', railgun: 'wic_railgun' };
+
+// full-screen pause menu: resume / restart / arcade toggle / quit
+function drawPauseMenu() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,6,10,0.78)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  if (settings.arcade) {
+    ctx.fillStyle = ctx.createPattern(scanlines(), 'repeat');
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
+  const cx = view.w / 2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold ${Math.min(72, view.w / 12)}px monospace`;
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#000';
+  ctx.strokeText('PAUSED', cx, view.h * 0.24);
+  ctx.fillStyle = '#ff5252';
+  ctx.shadowColor = '#ff1744';
+  ctx.shadowBlur = 26;
+  ctx.fillText('PAUSED', cx, view.h * 0.24);
+  ctx.shadowBlur = 0;
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#78909c';
+  ctx.fillText(`${level().name}  ·  WAVE ${game.wave}/${level().waves}  ·  SCORE ${game.score}`, cx, view.h * 0.24 + 54);
+
+  const items = [
+    ['▶  RESUME', () => { paused = false; }],
+    ['↻  RESTART LEVEL', () => { paused = false; startLevel(); }],
+    ['⚙  ' + (settings.arcade ? 'ARCADE FX: ON' : 'ARCADE FX: OFF'), () => { settings.arcade = !settings.arcade; saveSettings(); }],
+    ['✕  QUIT TO MENU', () => { paused = false; char.hp = derived(char).maxHp; saveCharacter(char); hasSave = true; state = 'title'; }],
+  ];
+  const bw = Math.min(360, view.w - 80), bh = 52, gap = 14;
+  let by = view.h * 0.42;
+  items.forEach(([label, cb], i) => {
+    const bx = cx - bw / 2;
+    const idx = uiButtons.length;
+    const focused = gamepad.connected && idx === gpFocus;
+    const m = input.mouse;
+    const hov = m.x >= bx && m.x <= bx + bw && m.y >= by && m.y <= by + bh;
+    ctx.fillStyle = hov || focused ? 'rgba(40,52,64,0.96)' : 'rgba(16,20,26,0.92)';
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 10); ctx.fill(); }
+    else ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = hov || focused ? '#ffd54f' : '#546e7a';
+    ctx.lineWidth = hov || focused ? 2.5 : 1.5;
+    ctx.stroke();
+    ctx.font = 'bold 20px monospace';
+    ctx.fillStyle = hov || focused ? '#fff' : '#cfd8dc';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, cx, by + bh / 2);
+    button(bx, by, bw, bh, cb);
+    by += bh + gap;
+  });
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#607d8b';
+  ctx.fillText('[ESC] resume  ·  [TAB] character sheet', cx, by + 10);
+  ctx.restore();
+}
+
 function drawWeaponWheel() {
   const owned = ownedList();
   const cx = view.w / 2, cy = view.h / 2;
@@ -5510,13 +5577,26 @@ function render(dt) {
       ctx.stroke();
       continue;
     }
-    if (SPRITES.boom) {
+    const boomSp = SPRITES.explosion_hd || SPRITES.boom;
+    if (boomSp) {
       ctx.save();
       ctx.translate(ex.x, ex.y);
-      ctx.globalAlpha = 1 - t;
-      drawSpriteFit(SPRITES.boom, ex.r * 2.2 * (0.55 + t * 0.8), ex.r * 2.2 * (0.55 + t * 0.8));
+      ctx.globalCompositeOperation = 'lighter';
+      const sc = ex.r * 2.6 * (0.5 + t * 0.95);
+      ctx.globalAlpha = Math.max(0, 1 - t * 1.1);
+      ctx.rotate((ex.seed || 0) + t * 0.5);
+      drawSpriteFit(boomSp, sc, sc);
       ctx.restore();
       ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // white-hot expanding shockwave ring for extra HD punch
+    if (t < 0.6) {
+      ctx.strokeStyle = `rgba(255,255,255,${(0.6 - t) * 1.3})`;
+      ctx.lineWidth = 5 * (0.6 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(ex.x, ex.y, ex.r * (0.5 + t * 1.6), 0, Math.PI * 2);
+      ctx.stroke();
     }
     ctx.fillStyle = `rgba(255,171,64,${(1 - t) * 0.5})`;
     ctx.beginPath();
@@ -5697,6 +5777,7 @@ function render(dt) {
   drawScreenBlood();
   drawHUD();
   if (game.wheelOpen) drawWeaponWheel();
+  if (paused && state === 'playing') drawPauseMenu();
   // KILL MODE cut-in: the hero's portrait rides a slash streak across screen
   if (game.cutin) {
     const ci = game.cutin;
@@ -5781,7 +5862,7 @@ function frameInner(now) {
   wasGpConnected = gamepad.connected;
 
   // gamepad UI focus: d-pad browses buttons laid out last frame, A activates
-  const uiState = charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect' || state === 'gameover' || state === 'levelintro' || state === 'title';
+  const uiState = paused || charSheetOpen || state === 'shop' || state === 'charselect' || state === 'levelselect' || state === 'gameover' || state === 'levelintro' || state === 'title';
   if (uiState && uiButtons.length) {
     if (gpPressed('down') || gpPressed('right')) gpFocus = (gpFocus + 1) % uiButtons.length;
     if (gpPressed('up') || gpPressed('left')) gpFocus = (gpFocus - 1 + uiButtons.length) % uiButtons.length;
@@ -5832,8 +5913,9 @@ function frameInner(now) {
       else startLevel();
     }
   } else if (state === 'playing') {
+    if (wasPressed('escape') || gpPressed('back')) paused = !paused;
     if (wasPressed('tab') || gpPressed('start')) charSheetOpen = !charSheetOpen;
-    if (!charSheetOpen) {
+    if (!charSheetOpen && !paused) {
       if (hitStopT > 0) hitStopT -= dt; // freeze-frame: render, don't simulate
       else update(dt);
     }
