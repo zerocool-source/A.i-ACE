@@ -1813,6 +1813,50 @@ function update(dt) {
   }
   g.throwables = g.throwables.filter((tb) => tb.fuse > 0);
 
+  // -- GRAB & THROW [B]: seize a nearby zombie, then hurl it as a living
+  // projectile — it bowls through the crowd dealing heavy chain damage
+  if (wasPressed('b')) {
+    if (g.heldZombie && g.heldZombie.hp > 0) {
+      const hz = g.heldZombie;
+      hz.grabbed = false;
+      hz.thrown = { vx: Math.cos(p.angle) * 980, vy: Math.sin(p.angle) * 980, t: 0.55 };
+      g.heldZombie = null;
+      g.dmgNumbers.push({ x: p.x, y: p.y - 30, txt: 'HURLED!', color: '#ffd54f', life: 0.9, vy: -55 });
+      sfx.playHiggsWhomp();
+      addShake(4);
+    } else if (!g.heldZombie) {
+      let best = null, bd = 74;
+      for (const z of g.zombies) {
+        if (z.hp <= 0 || z.radius > 20 || z.super || z.waveBossName) continue; // too big to lift
+        const d = Math.hypot(z.x - p.x, z.y - p.y);
+        if (d < bd) { bd = d; best = z; }
+      }
+      if (best) {
+        best.grabbed = true;
+        best.grabT = 3;
+        best.thrown = null;
+        g.heldZombie = best;
+        g.dmgNumbers.push({ x: p.x, y: p.y - 30, txt: 'GRABBED — [B] THROW', color: '#80cbc4', life: 1.1, vy: -45 });
+        sfx.playSquelch();
+      }
+    }
+  }
+  if (g.heldZombie) {
+    const hz = g.heldZombie;
+    if (hz.hp <= 0) {
+      g.heldZombie = null;
+    } else {
+      hz.grabT -= dt;
+      hz.x = p.x + Math.cos(p.angle) * (p.radius + 30);
+      hz.y = p.y + Math.sin(p.angle) * (p.radius + 30);
+      if (hz.grabT <= 0) { // it wriggles free with a weak toss
+        hz.grabbed = false;
+        hz.thrown = { vx: Math.cos(p.angle) * 420, vy: Math.sin(p.angle) * 420, t: 0.35 };
+        g.heldZombie = null;
+      }
+    }
+  }
+
   // -- BLADESTORM [Z]: a ring of spinning razor discs orbits you, shredding
   // anything they touch — cuts weak zombies clean in half
   g.bladeCd = Math.max(0, (g.bladeCd || 0) - dt);
@@ -2155,6 +2199,40 @@ function update(dt) {
         });
       }
       if (z.hp <= 0) { killZombie(z, Math.random() * 6.28); continue; }
+    }
+    if (z.grabbed) { // pinned in your grip: no AI, just squirming
+      z.flash = Math.max(0, z.flash - dt);
+      continue;
+    }
+    if (z.thrown) { // airborne battering ram
+      z.thrown.t -= dt;
+      z.x += z.thrown.vx * dt;
+      z.y += z.thrown.vy * dt;
+      z.thrown.vx *= 0.97;
+      z.thrown.vy *= 0.97;
+      for (const z2 of g.zombies) {
+        if (z2 === z || z2.hp <= 0 || z2.grabbed) continue;
+        if (Math.hypot(z2.x - z.x, z2.y - z.y) < z2.radius + z.radius) {
+          z2.hp -= 95;
+          z2.flash = 0.1;
+          spawnBlood(z.x, z.y, 8, '#8e0e0e');
+          const ka = Math.atan2(z2.y - z.y, z2.x - z.x);
+          z2.x += Math.cos(ka) * 26;
+          z2.y += Math.sin(ka) * 26;
+          if (z2.hp <= 0) killZombie(z2, ka);
+        }
+      }
+      if (z.thrown.t <= 0) { // hard landing
+        const la = Math.atan2(z.thrown.vy, z.thrown.vx);
+        z.thrown = null;
+        z.hp -= 130;
+        z.flash = 0.15;
+        spawnBlood(z.x, z.y, 12, '#8e0e0e', la);
+        addShake(2);
+        if (z.hp <= 0) killZombie(z, la);
+      }
+      collideProps(z);
+      continue;
     }
     const holdPosition = z.ranged && distT < z.ranged.range * 0.85;
     if (z.human) {
@@ -4409,7 +4487,7 @@ function drawHUD() {
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
   const keys = ownedList().map((w) => `[${WEAPONS[w].key}]${WEAPONS[w].name}`).join(' ');
-  ctx.fillText(`${keys}  [R]RELOAD [SPACE]DASH [TAB]CHAR`, view.w - 24, view.h - 40);
+  ctx.fillText(`${keys}  [R]RELOAD [SPACE]DASH [B]GRAB [Z]BLADES [TAB]CHAR`, view.w - 24, view.h - 40);
   // dash cooldown pip
   ctx.fillStyle = p.dashCooldown <= 0 ? '#80cbc4' : '#37474f';
   ctx.fillText(p.dashCooldown <= 0 ? 'DASH READY' : `DASH ${p.dashCooldown.toFixed(1)}s`, view.w - 24, view.h - 112);
