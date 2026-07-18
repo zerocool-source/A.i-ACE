@@ -11,6 +11,7 @@ import { pollGamepad, gpPressed, gamepad, rumble } from './gamepad.js';
 import * as sfx from './audio.js';
 import { asset } from './assets.js';
 import { settings, saveSettings, upscaleMode, UPSCALE_MODES, detectGPU } from './settings.js';
+import { STORY_BEATS, OBJECTIVES } from './story.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -821,6 +822,9 @@ function newGame() {
     killT: 0,
     killMarks: [],
     slashFx: [],
+    storyBeats: [],
+    storyLine: null,
+    objective: '',
     blades: [],
     bladeUntil: 0,
     bladeCd: 0,
@@ -975,6 +979,11 @@ function startLevel() {
   if (gameMode === 'campaign' && LEVEL_CHATS[level().key]) {
     game.chatScript = [...LEVEL_CHATS[level().key]];
     game.chatT = 2.5;
+  }
+  // STORY DIRECTOR: arm this level's in-combat narrative beats
+  if (gameMode === 'campaign') {
+    game.storyBeats = [...(STORY_BEATS[level().key] || [])];
+    game.objective = OBJECTIVES[level().key] || '';
   }
   if (gameMode === 'drive') setupDrive();
   decalCanvas = document.createElement('canvas');
@@ -1837,6 +1846,28 @@ function update(dt) {
   // gore flash sprites (bloodburst) fade fast
   for (const sf of g.slashFx) sf.t -= dt;
   g.slashFx = g.slashFx.filter((sf) => sf.t > 0);
+
+  // -- STORY DIRECTOR: one dramatic beat at a time, typed out mid-combat
+  if (g.storyLine) {
+    g.storyLine.t += dt;
+    if (g.storyLine.t > g.storyLine.dur) g.storyLine = null;
+  } else if (g.storyBeats.length) {
+    const b = g.storyBeats[0];
+    const w = b.when || {};
+    const hit = (w.at != null && g.time >= w.at) ||
+      (w.kills != null && g.kills >= w.kills) ||
+      (w.wave != null && g.wave >= w.wave);
+    if (hit) {
+      g.storyBeats.shift();
+      g.storyLine = { ...b, t: 0, dur: 5.6 };
+      if (b.objective) g.objective = b.objective;
+      if (b.fx === 'shake') addShake(9);
+      else if (b.fx === 'flare') { g.hurtVoiceFlash = 0.5; addShake(5); sfx.playScream(); }
+      else if (b.fx === 'horde') { for (let i = 0; i < 20; i++) g.zombies.push(spawnLevelZombie(randomZombieType(char.campaignLevel))); }
+      else if (b.fx === 'strike') { for (let i = 0; i < 4; i++) g.strikes.push({ x: p.x + (Math.random() - 0.5) * 500, y: p.y + (Math.random() - 0.5) * 500, t: 0.4 + i * 0.3 }); }
+    }
+  }
+  if (g.hurtVoiceFlash > 0) g.hurtVoiceFlash -= dt;
 
   // -- airstrike beacon [X]
   if ((wasPressed('x') || gpPressed('r3')) && (char.airstrikes || 0) > 0) {
@@ -3991,6 +4022,85 @@ function drawMinimap() {
   ctx.restore();
 }
 
+// STORY CARD: a cinematic letterboxed strip that types a beat out mid-fight.
+// The enemy VOICE gets a glitchy red card; allies get cool steel.
+const STORY_SPEAKERS = {
+  echo: { name: 'ECHO-6', color: '#80cbc4' },
+  voice: { name: '??? ', color: '#ff1744' },
+  partner: { name: 'PARTNER', color: '#b39ddb' },
+  hero: { name: 'YOU', color: '#ffd54f' },
+  squad: { name: 'SQUAD', color: '#81c784' },
+};
+function drawStoryCard() {
+  const sl = game.storyLine;
+  if (!sl || state !== 'playing') return;
+  const spk = STORY_SPEAKERS[sl.speaker] || STORY_SPEAKERS.echo;
+  let name = spk.name;
+  if (sl.speaker === 'hero') name = heroById(char.heroId).name.split(' ')[0].toUpperCase();
+  if (sl.speaker === 'partner' && char.partnerId) name = heroById(char.partnerId).name.split(' ')[0].toUpperCase();
+  const isVoice = sl.speaker === 'voice';
+  const fadeIn = Math.min(1, sl.t * 4);
+  const fadeOut = Math.min(1, (sl.dur - sl.t) * 2);
+  const alpha = Math.min(fadeIn, fadeOut);
+  const w = Math.min(760, view.w - 60);
+  const x = (view.w - w) / 2;
+  const y = view.h - 224;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // card
+  ctx.fillStyle = isVoice ? 'rgba(26,4,8,0.93)' : 'rgba(8,12,18,0.93)';
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, 64, 8); ctx.fill(); }
+  else ctx.fillRect(x, y, w, 64);
+  // accent bar + border
+  ctx.fillStyle = spk.color;
+  ctx.fillRect(x, y, 5, 64);
+  ctx.strokeStyle = isVoice ? 'rgba(255,23,68,0.7)' : 'rgba(120,150,170,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x, y, w, 64);
+  // portrait chip for hero/partner
+  let tx = x + 18;
+  const pid = sl.speaker === 'hero' ? char.heroId : sl.speaker === 'partner' ? char.partnerId : null;
+  if (pid) {
+    const port = getImage(`portraits/${pid}.png`);
+    if (port) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x + 12, y + 8, 48, 48);
+      ctx.clip();
+      ctx.drawImage(port, x + 12, y + 8, 48, 48);
+      ctx.restore();
+      ctx.strokeStyle = spk.color;
+      ctx.strokeRect(x + 12, y + 8, 48, 48);
+      tx = x + 72;
+    }
+  }
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = spk.color;
+  // the VOICE glitches: its name jitters
+  const jx = isVoice ? (Math.random() - 0.5) * 2 : 0;
+  ctx.fillText(name, tx + jx, y + 10);
+  // typewriter body
+  const chars = Math.floor(sl.t * 55);
+  const shown = sl.text.slice(0, chars);
+  ctx.font = isVoice ? 'bold 14px monospace' : '14px monospace';
+  ctx.fillStyle = isVoice ? '#ff8a80' : '#e0e6ea';
+  // wrap to two lines
+  const maxW = w - (tx - x) - 20;
+  let line1 = shown, line2 = '';
+  if (ctx.measureText(shown).width > maxW) {
+    let cut = shown.length;
+    while (cut > 0 && ctx.measureText(shown.slice(0, cut)).width > maxW) cut--;
+    const sp = shown.lastIndexOf(' ', cut);
+    line1 = shown.slice(0, sp > 0 ? sp : cut);
+    line2 = shown.slice(sp > 0 ? sp + 1 : cut);
+  }
+  ctx.fillText(line1, tx + jx, y + 28);
+  if (line2) ctx.fillText(line2, tx + jx, y + 44);
+  ctx.restore();
+}
+
 // off-screen threat arrows: chevrons pinned to the screen edge pointing at
 // nearby enemies you can't see yet — bosses always flagged, big ones too
 function drawEnemyArrows() {
@@ -4321,6 +4431,11 @@ function drawHUD() {
     gameMode === 'tenk' ? `10,000 — ${game.survivalPool + game.zombies.length} LEFT` :
     `${lv.name} — WAVE ${game.wave}/${lv.waves}`;
   ctx.fillText(topLine, view.w / 2, 22);
+  if (gameMode === 'campaign' && game.objective) {
+    ctx.font = 'bold 11px monospace';
+    ctx.fillStyle = '#ffca28';
+    ctx.fillText(`◆ OBJECTIVE: ${game.objective}`, view.w / 2, 62);
+  }
   // super boss health bar
   if (game.superBoss && game.superBoss.hp > 0) {
     const bw2 = Math.min(440, view.w - 200);
@@ -5928,6 +6043,11 @@ function render(dt) {
       ctx.fillRect(0, 0, view.w, view.h);
     }
   }
+  if (game.hurtVoiceFlash > 0) {
+    const vf = game.hurtVoiceFlash * (0.5 + 0.5 * Math.sin(performance.now() / 70));
+    ctx.fillStyle = `rgba(160,10,20,${Math.min(0.32, vf * 0.5)})`;
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
   if (game.nukeFlash > 0) {
     ctx.fillStyle = `rgba(255,255,255,${Math.min(0.95, game.nukeFlash)})`;
     ctx.fillRect(0, 0, view.w, view.h);
@@ -5959,6 +6079,7 @@ function render(dt) {
   drawScreenBlood();
   drawEnemyArrows();
   drawHUD();
+  drawStoryCard(dt);
   if (game.wheelOpen) drawWeaponWheel();
   if (paused && state === 'playing') drawPauseMenu();
   // KILL MODE cut-in: the hero's portrait rides a slash streak across screen
