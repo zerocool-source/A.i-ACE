@@ -125,7 +125,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'wic_rifle', 'wic_shotgun', 'wic_railgun',
                     'lootcrate', 'barrier_scifi', 'pylon',
                     'explosion_hd', 'fighterjet', 'slash_fx', 'bloodburst',
-                    'neon_kiosk',
+                    'neon_kiosk', 'buzzsaw', 'severed_arm', 'severed_leg', 'blood_pool',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -820,6 +820,10 @@ function newGame() {
     nadeSel: 'frag',
     killT: 0,
     killMarks: [],
+    slashFx: [],
+    blades: [],
+    bladeUntil: 0,
+    bladeCd: 0,
     combo: 0,
     comboT: 0,
     comboBest: 0,
@@ -1414,41 +1418,77 @@ function applyPickup(type) {
   sfx.playPurchase();
 }
 
-function goreKill(x, y, radius, dirAngle, big) {
-  // robot destruction: armor plates, gears and servo arms shear off on big
-  // kills, riding a shower of sparks and an oil burst
-  if (big && game.gibs.length < 240) {
-    const parts = ['debris_plate', 'debris_gear', 'debris_arm'].filter((k) => SPRITES[k]);
-    for (let i = 0; i < 4; i++) {
+function goreKill(x, y, radius, dirAngle, big, robot = false) {
+  const p = game.player;
+  if (robot) {
+    // --- ROBOT: armor plates, gears, servo arms + spark fountain + oil ---
+    if (big && game.gibs.length < 260) {
+      const parts = ['debris_plate', 'debris_gear', 'debris_arm'].filter((k) => SPRITES[k]);
+      for (let i = 0; i < 5; i++) {
+        const la = Math.random() * Math.PI * 2;
+        game.gibs.push({
+          x, y, vx: Math.cos(la) * (180 + Math.random() * 240), vy: Math.sin(la) * (180 + Math.random() * 240),
+          rot: Math.random() * 6.28, rotV: (Math.random() - 0.5) * 10, size: 9 + Math.random() * 7,
+          color: '#3a4048', sprite: parts.length ? parts[Math.floor(Math.random() * parts.length)] : null,
+          life: 0.7 + Math.random() * 0.4,
+        });
+      }
+    }
+    sfx.playSquelch();
+    spawnBlood(x, y, big ? 34 : 14, '#23272e', dirAngle);
+    for (let i = 0; i < (big ? 30 : 14) && game.particles.length < 1000; i++) {
+      const sa = Math.random() * Math.PI * 2;
+      game.particles.push({ x, y, vx: Math.cos(sa) * (160 + Math.random() * 340), vy: Math.sin(sa) * (160 + Math.random() * 340),
+        life: 0.2 + Math.random() * 0.3, color: Math.random() < 0.6 ? '#ffd54f' : '#ff8a3d', size: 2.5 });
+    }
+    spawnGibs(x, y, big ? 14 : 6, dirAngle);
+    stampDecal(x, y, radius, true);
+    if (Math.hypot(p.x - x, p.y - y) < 140) addScreenBlood(big ? 1.0 : 0.5);
+    return;
+  }
+  // --- FLESH: OVER-THE-TOP. Blood GUSHES, limbs fly, a pool stamps down ---
+  sfx.playSquelch();
+  // flying severed limbs on every kill (more on big ones)
+  const limbs = ['severed_arm', 'severed_leg'].filter((k) => SPRITES[k]);
+  const nLimb = big ? 5 : 2;
+  if (game.gibs.length < 300) {
+    for (let i = 0; i < nLimb; i++) {
       const la = Math.random() * Math.PI * 2;
       game.gibs.push({
-        x, y,
-        vx: Math.cos(la) * (180 + Math.random() * 220),
-        vy: Math.sin(la) * (180 + Math.random() * 220),
-        rot: Math.random() * 6.28, rotV: (Math.random() - 0.5) * 10,
-        size: 9 + Math.random() * 7, color: '#3a4048',
-        sprite: parts.length ? parts[Math.floor(Math.random() * parts.length)] : null,
-        life: 0.7 + Math.random() * 0.4,
+        x, y, vx: Math.cos(la) * (200 + Math.random() * 260), vy: Math.sin(la) * (200 + Math.random() * 260),
+        rot: Math.random() * 6.28, rotV: (Math.random() - 0.5) * 14, size: big ? 16 : 11,
+        color: '#7b1d1d', sprite: limbs.length ? limbs[i % limbs.length] : null, life: 0.9 + Math.random() * 0.5,
       });
     }
   }
-  sfx.playSquelch();
-  spawnBlood(x, y, big ? 34 : 14, '#23272e', dirAngle); // oil burst
-  // spark fountain — the signature robot death read
-  for (let i = 0; i < (big ? 26 : 12) && game.particles.length < 900; i++) {
-    const sa = Math.random() * Math.PI * 2;
-    game.particles.push({
-      x, y,
-      vx: Math.cos(sa) * (160 + Math.random() * 320),
-      vy: Math.sin(sa) * (160 + Math.random() * 320),
-      life: 0.2 + Math.random() * 0.3,
-      color: Math.random() < 0.6 ? '#ffd54f' : '#ff8a3d', size: 2.5,
-    });
+  // fountain of blood particles bursting outward
+  for (let i = 0; i < (big ? 60 : 30) && game.particles.length < 1100; i++) {
+    const sa = (dirAngle != null ? dirAngle : Math.random() * Math.PI * 2) + (Math.random() - 0.5) * 2.4;
+    const sp = 120 + Math.random() * 420;
+    game.particles.push({ x, y, vx: Math.cos(sa) * sp, vy: Math.sin(sa) * sp,
+      life: 0.3 + Math.random() * 0.45, color: Math.random() < 0.7 ? '#8e0e0e' : '#c62828', size: 2 + Math.random() * 3 });
   }
-  spawnGibs(x, y, big ? 14 : 6, dirAngle);
+  spawnBlood(x, y, big ? 60 : 28, '#7b1d1d', dirAngle);
+  spawnGibs(x, y, big ? 22 : 10, dirAngle);
+  // a bloodburst flash + a wet pool decal
+  if (SPRITES.bloodburst) game.slashFx.push({ x, y, t: 0.35, sprite: 'bloodburst', r: radius * (big ? 4 : 2.6), rot: Math.random() * 6.28 });
+  stampBloodPool(x, y, radius * (big ? 2.2 : 1.4));
   stampDecal(x, y, radius, true);
-  const p = game.player;
-  if (Math.hypot(p.x - x, p.y - y) < 140) addScreenBlood(big ? 1.0 : 0.5);
+  addShake(big ? 5 : 2);
+  if (Math.hypot(p.x - x, p.y - y) < 170) addScreenBlood(big ? 1.6 : 0.9);
+}
+
+// stamp a wet blood-pool sprite onto the persistent decal canvas
+function stampBloodPool(x, y, r) {
+  const sp = SPRITES.blood_pool;
+  if (!sp) return;
+  decalCtx.save();
+  decalCtx.translate(x, y);
+  decalCtx.rotate(Math.random() * 6.28);
+  decalCtx.globalAlpha = 0.85;
+  const k = (r * 2) / Math.max(sp.width, sp.height);
+  decalCtx.drawImage(sp, -sp.width * k / 2, -sp.height * k / 2, sp.width * k, sp.height * k);
+  decalCtx.restore();
 }
 
 // ---- update -------------------------------------------------------------------
@@ -1763,6 +1803,40 @@ function update(dt) {
     }
   }
   g.throwables = g.throwables.filter((tb) => tb.fuse > 0);
+
+  // -- BLADESTORM [Z]: a ring of spinning razor discs orbits you, shredding
+  // anything they touch — cuts weak zombies clean in half
+  g.bladeCd = Math.max(0, (g.bladeCd || 0) - dt);
+  if ((wasPressed('z') || gpPressed('l3')) && g.bladeCd <= 0) {
+    g.bladeUntil = g.time + 8;
+    g.bladeCd = 16;
+    g.blades = [0, 1, 2, 3].map((i) => ({ a: (i / 4) * Math.PI * 2 }));
+    banner('BLADESTORM', 'razor discs deployed — carve them up', '#e0e0e0');
+    sfx.playHiggsWhomp();
+  }
+  if (g.time < g.bladeUntil) {
+    const orbit = 96, bladeDmg = 90 * dt * 60 / 60; // dps applied per contact tick
+    for (const bl of g.blades) {
+      bl.a += dt * 7; // fast spin around you
+      bl.x = p.x + Math.cos(bl.a) * orbit;
+      bl.y = p.y + Math.sin(bl.a) * orbit;
+      for (const z of g.zombies) {
+        if (z.hp <= 0) continue;
+        if (Math.hypot(z.x - bl.x, z.y - bl.y) < z.radius + 20) {
+          z.hp -= 55 * dt * 8; // heavy shred
+          z.flash = 0.1;
+          if (Math.random() < dt * 20) spawnBlood(z.x, z.y, 3, '#8e0e0e');
+          if (z.hp <= 0) killZombie(z, bl.a);
+        }
+      }
+    }
+  } else {
+    g.blades = [];
+  }
+
+  // gore flash sprites (bloodburst) fade fast
+  for (const sf of g.slashFx) sf.t -= dt;
+  g.slashFx = g.slashFx.filter((sf) => sf.t > 0);
 
   // -- airstrike beacon [X]
   if ((wasPressed('x') || gpPressed('r3')) && (char.airstrikes || 0) > 0) {
@@ -3015,7 +3089,7 @@ function killZombie(z, dirAngle) {
   // exploders go off when shot
   if (z.explodes) explode(z.x, z.y, z.explodes.radius, z.damage * 2.2, true);
   dropLoot(z.x, z.y, z.type === 'brute' || z.type === 'boss');
-  goreKill(z.x, z.y, z.radius, dirAngle, z.type === 'boss' || z.type === 'brute');
+  goreKill(z.x, z.y, z.radius, dirAngle, z.type === 'boss' || z.type === 'brute' || z.type === 'butcher' || z.super, !!z.type && z.type.startsWith('bot_'));
   if (g.corpses.length < 140) {
     g.corpses.push({ x: z.x, y: z.y, angle: dirAngle ?? Math.random() * Math.PI * 2, type: z.type, radius: z.radius, t: 12 });
   }
@@ -5725,6 +5799,39 @@ function render(dt) {
       ctx.fill();
     }
     ctx.restore();
+  }
+  // gore flash sprites (bloodburst on kills)
+  for (const sf of game.slashFx) {
+    const sp = SPRITES[sf.sprite];
+    if (!sp) continue;
+    ctx.save();
+    ctx.translate(sf.x, sf.y);
+    ctx.rotate(sf.rot || 0);
+    ctx.globalAlpha = Math.min(1, sf.t * 3);
+    drawSpriteFit(sp, sf.r * 2, sf.r * 2);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+  // BLADESTORM razor discs orbiting the player
+  if (game.time < game.bladeUntil) {
+    for (const bl of game.blades) {
+      ctx.save();
+      ctx.translate(bl.x, bl.y);
+      ctx.rotate((bl.a || 0) * 4);
+      if (SPRITES.buzzsaw) drawSpriteFit(SPRITES.buzzsaw, 42, 42);
+      else {
+        ctx.fillStyle = '#cfd8dc';
+        ctx.beginPath();
+        for (let i = 0; i < 12; i++) {
+          const a = (i / 12) * Math.PI * 2;
+          const rr = i % 2 ? 20 : 12;
+          ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
   }
   // red kill X's, SYNTHETIK style
   for (const km of game.killMarks) {

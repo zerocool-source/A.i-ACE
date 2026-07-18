@@ -16,7 +16,7 @@ function ac() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain();
-    master.gain.value = 0.7;
+    master.gain.value = 1.0;
     master.connect(ctx.destination);
     musicGain = ctx.createGain();
     musicGain.gain.value = 0.35;
@@ -65,7 +65,7 @@ export function playGunshot(weapon) {
     src.buffer = gunshotBuf;
     src.playbackRate.value = (GUNSHOT_RATES[weapon] ?? 1) * (0.95 + Math.random() * 0.1);
     const g = c.createGain();
-    g.gain.value = weapon === 'smg' || weapon === 'minigun' ? 0.35 : 0.55;
+    g.gain.value = weapon === 'smg' || weapon === 'minigun' ? 0.5 : 0.8;
     src.connect(g).connect(master);
     src.start(t);
     return;
