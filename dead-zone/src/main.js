@@ -3900,6 +3900,57 @@ function drawMinimap() {
   ctx.restore();
 }
 
+// off-screen threat arrows: chevrons pinned to the screen edge pointing at
+// nearby enemies you can't see yet — bosses always flagged, big ones too
+function drawEnemyArrows() {
+  if (state !== 'playing' || paused) return;
+  const p = game.player;
+  const cx = view.w / 2, cy = view.h / 2;
+  const margin = 46;
+  // rank: bosses/supers first, then nearest — cap the count so it stays clean
+  const off = [];
+  for (const z of game.zombies) {
+    if (z.hp <= 0) continue;
+    const sx = z.x - cam.x, sy = z.y - cam.y;
+    if (sx > -30 && sx < view.w + 30 && sy > -30 && sy < view.h + 30) continue; // on-screen
+    const d = Math.hypot(z.x - p.x, z.y - p.y);
+    const boss = z.type === 'boss' || z.type === 'bot_warframe' || z.super;
+    if (!boss && d > 1500) continue; // only flag reasonably close rank-and-file
+    off.push({ z, d, boss });
+  }
+  off.sort((a, b) => (b.boss - a.boss) || (a.d - b.d));
+  const shown = off.slice(0, 10);
+  for (const { z, boss } of shown) {
+    const ang = Math.atan2(z.y - (cam.y + cy), z.x - (cam.x + cx));
+    // project the direction onto the screen-edge rectangle
+    const hw = view.w / 2 - margin, hh = view.h / 2 - margin;
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+    const tx = Math.abs(dx) < 1e-3 ? Infinity : hw / Math.abs(dx);
+    const ty = Math.abs(dy) < 1e-3 ? Infinity : hh / Math.abs(dy);
+    const tt = Math.min(tx, ty);
+    const ex = cx + dx * tt, ey = cy + dy * tt;
+    ctx.save();
+    ctx.translate(ex, ey);
+    ctx.rotate(ang);
+    const col = boss ? '#e040fb' : z.color || '#ef5350';
+    const scale = boss ? 1.5 : 1;
+    const pulse = boss ? 0.7 + 0.3 * Math.sin(performance.now() / 150) : 0.85;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = boss ? 12 : 6;
+    ctx.beginPath();
+    ctx.moveTo(14 * scale, 0);
+    ctx.lineTo(-6 * scale, -9 * scale);
+    ctx.lineTo(-6 * scale, 9 * scale);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+}
+
 // radial gun selector: a fan of owned-weapon slots around screen centre,
 // the aimed slot lit up; release right-mouse to equip it
 const WEAPON_ICON = { rifle: 'wic_rifle', shotgun: 'wic_shotgun', railgun: 'wic_railgun' };
@@ -5653,18 +5704,18 @@ function render(dt) {
     ctx.translate(bm.x, bm.y);
     const planeSp = SPRITES[bm.sp || 'bomber'];
     if (planeSp) {
-      const fly = bm.vx < 0 ? -Math.PI / 2 : Math.PI / 2; // nose-up art
+      const fly = Math.atan2(bm.vy || 0, bm.vx); // art faces right → nose = travel dir
       ctx.save();
-      ctx.translate(26, 84); // shadow cast far below the airframe
+      ctx.translate(22, 78); // shadow cast below the airframe
       ctx.rotate(fly);
       ctx.globalAlpha = 0.3;
       ctx.filter = 'brightness(0)';
-      drawSpriteFit(planeSp, 150, 150);
+      drawSpriteFit(planeSp, 168, 168);
       ctx.filter = 'none';
       ctx.restore();
       ctx.globalAlpha = 1;
       ctx.rotate(fly);
-      drawSpriteFit(planeSp, 150, 150);
+      drawSpriteFit(planeSp, 168, 168);
     } else {
       ctx.fillStyle = '#37474f';
       ctx.beginPath();
@@ -5724,12 +5775,19 @@ function render(dt) {
     ctx.fillStyle = `rgba(255,23,68,${pulse})`;
     ctx.fillRect(0, 0, view.w, view.h);
   }
-  // cinematic grade: corner vignette + a whisper of warm light
+  // grimdark grade: a heavy cold vignette + a bruised red-black edge wash
   {
-    const vg = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.42, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.75);
+    const vg = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.3, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.72);
     vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.34)');
+    vg.addColorStop(0.7, 'rgba(6,4,10,0.28)');
+    vg.addColorStop(1, 'rgba(2,0,4,0.62)');
     ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, view.w, view.h);
+    // a whisper of blood-red at the very corners for the twisted mood
+    const rv = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.55, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.78);
+    rv.addColorStop(0, 'rgba(0,0,0,0)');
+    rv.addColorStop(1, 'rgba(60,4,10,0.22)');
+    ctx.fillStyle = rv;
     ctx.fillRect(0, 0, view.w, view.h);
   }
   if (settings.arcade) {
@@ -5775,6 +5833,7 @@ function render(dt) {
     }
   }
   drawScreenBlood();
+  drawEnemyArrows();
   drawHUD();
   if (game.wheelOpen) drawWeaponWheel();
   if (paused && state === 'playing') drawPauseMenu();
