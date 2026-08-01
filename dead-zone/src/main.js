@@ -829,6 +829,8 @@ function newGame() {
     bleed: 0,
     supplies: { food: 2, water: 2, bandage: 3 },
     needWarnT: 0,
+    buildMode: false,
+    barricadeCost: 25,
     generators: [],
     storyBeats: [],
     storyLine: null,
@@ -1752,7 +1754,7 @@ function update(dt) {
   // -- shooting (mouse or RT)
   p.fireCooldown = Math.max(0, p.fireCooldown - dt);
   p.muzzleFlash = Math.max(0, p.muzzleFlash - dt);
-  const holdFire = (input.mouse.down || gamepad.fire) && !game.wheelOpen;
+  const holdFire = (input.mouse.down || gamepad.fire) && !game.wheelOpen && !g.buildMode;
   const tapFire = wasPressed('mouse') || gpPressed('rt-tap'); // rt edge handled via holdFire for autos
   const wantsFire = ws.auto ? holdFire : (tapFire || (gamepad.fire && p.fireCooldown === 0 && !p._rtHeld));
   p._rtHeld = gamepad.fire;
@@ -2333,6 +2335,31 @@ function update(dt) {
           z.attackCooldown = 0.9;
         }
       } else {
+        // barricades in the way get torn apart first
+        let smashed = false;
+        for (let bi = g.props.length - 1; bi >= 0; bi--) {
+          const br = g.props[bi];
+          if (br.kind !== 'barricade_built') continue;
+          const cxp = Math.max(br.x, Math.min(z.x, br.x + br.w));
+          const cyp = Math.max(br.y, Math.min(z.y, br.y + br.h));
+          if (Math.hypot(z.x - cxp, z.y - cyp) < z.radius + 12) {
+            br.hp -= z.damage * 1.6;
+            z.attackCooldown = 0.8;
+            smashed = true;
+            for (let k = 0; k < 4; k++) {
+              const sa = Math.random() * Math.PI * 2;
+              g.particles.push({ x: cxp, y: cyp, vx: Math.cos(sa) * 120, vy: Math.sin(sa) * 120,
+                life: 0.25, color: '#a1887f', size: 2.5 });
+            }
+            if (br.hp <= 0) {
+              g.props.splice(bi, 1);
+              addShake(3);
+              banner('BARRICADE DOWN', 'they are through', '#ef5350');
+            }
+            break;
+          }
+        }
+        if (smashed) { z.flash = Math.max(z.flash, 0.05); }
         // opportunistic swipes at anything that blunders into reach
         let swiped = false;
         for (const a of g.allies) {
@@ -2785,6 +2812,38 @@ function update(dt) {
     }
   }
   g.bombers = (g.bombers || []).filter((bm) => bm.life > 0);
+
+  // -- BUILD MODE [N]: fortify. Place wooden barricades for scrap; the
+  // infected have to chew through them, which buys you the seconds that
+  // decide a night. Blocks your own line too — funnel them, don't wall in.
+  if (wasPressed('n')) {
+    g.buildMode = !g.buildMode;
+    banner(g.buildMode ? 'BUILD MODE' : 'BUILD MODE OFF',
+      g.buildMode ? `click to raise a barricade · ⚙${g.barricadeCost} · [N] exit` : 'back to fighting', '#a1887f');
+  }
+  if (g.buildMode && wasPressed('mouse')) {
+    const wx = cam.x + input.mouse.x, wy = cam.y + input.mouse.y;
+    const near = Math.hypot(wx - p.x, wy - p.y) < 300;
+    if (!near) {
+      g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: 'TOO FAR', color: '#ef5350', life: 0.9, vy: -45 });
+    } else if (char.scrap < g.barricadeCost) {
+      sfx.playDenied();
+      g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: `NEED ⚙${g.barricadeCost}`, color: '#ef5350', life: 1, vy: -45 });
+    } else {
+      char.scrap -= g.barricadeCost;
+      saveCharacter(char);
+      // orient the plank across your facing so it blocks the way you're looking
+      const horiz = Math.abs(Math.cos(p.angle)) < 0.5;
+      const bw = horiz ? 96 : 20, bh = horiz ? 20 : 96;
+      g.props.push({
+        x: wx - bw / 2, y: wy - bh / 2, w: bw, h: bh,
+        kind: 'barricade_built', low: false, seed: Math.random(),
+        hp: 320, maxHp: 320,
+      });
+      sfx.playReload();
+      g.dmgNumbers.push({ x: wx, y: wy - 20, txt: 'BARRICADE UP', color: '#a1887f', life: 1, vy: -40 });
+    }
+  }
 
   // -- SURVIVAL SIM: needs decay, wounds bleed, [Y] uses the right supply
   if (g.survival) {
@@ -3489,6 +3548,32 @@ function drawProps() {
         ctx.fillStyle = char.scrap >= pr.cost ? '#ffd54f' : '#ef5350';
         ctx.fillText(`[F] UNLOCK ⚙${pr.cost}`, dcx, dcy - 16);
         ctx.textBaseline = 'top';
+      }
+    } else if (pr.kind === 'barricade_built') {
+      const frac = Math.max(0, pr.hp / pr.maxHp);
+      ctx.fillStyle = '#5d4433';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      // plank lines
+      ctx.strokeStyle = '#7a5a42';
+      ctx.lineWidth = 2;
+      const horiz = pr.w > pr.h;
+      for (let k = 1; k < 3; k++) {
+        ctx.beginPath();
+        if (horiz) { ctx.moveTo(pr.x, pr.y + (pr.h * k) / 3); ctx.lineTo(pr.x + pr.w, pr.y + (pr.h * k) / 3); }
+        else { ctx.moveTo(pr.x + (pr.w * k) / 3, pr.y); ctx.lineTo(pr.x + (pr.w * k) / 3, pr.y + pr.h); }
+        ctx.stroke();
+      }
+      ctx.strokeStyle = '#3e2d22';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(pr.x, pr.y, pr.w, pr.h);
+      // damage: splinter cracks + a health pip
+      if (frac < 1) {
+        ctx.fillStyle = `rgba(20,12,8,${(1 - frac) * 0.55})`;
+        ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(pr.x, pr.y - 6, pr.w, 3);
+        ctx.fillStyle = frac > 0.5 ? '#aed581' : frac > 0.25 ? '#ffca28' : '#ef5350';
+        ctx.fillRect(pr.x, pr.y - 6, pr.w * frac, 3);
       }
     } else if (SPRITE_PROPS.has(pr.kind)) {
       const sp = SPRITES[PROP_SPRITE[pr.kind] || pr.kind];
@@ -4220,6 +4305,44 @@ function drawMinimap() {
   ctx.restore();
 }
 
+// build-mode ghost: shows exactly where the next barricade lands, green when
+// affordable and in range, red when not
+function drawBuildGhost() {
+  const p = game.player;
+  const mx = input.mouse.x, my = input.mouse.y;
+  const wx = cam.x + mx, wy = cam.y + my;
+  const inRange = Math.hypot(wx - p.x, wy - p.y) < 300;
+  const afford = char.scrap >= game.barricadeCost;
+  const ok = inRange && afford;
+  const horiz = Math.abs(Math.cos(p.angle)) < 0.5;
+  const bw = horiz ? 96 : 20, bh = horiz ? 20 : 96;
+  ctx.save();
+  // range ring around you
+  ctx.strokeStyle = 'rgba(161,136,127,0.35)';
+  ctx.setLineDash([6, 8]);
+  ctx.beginPath();
+  ctx.arc(p.x - cam.x, p.y - cam.y, 300, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // the plank itself
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = ok ? '#8d6e63' : '#b71c1c';
+  ctx.fillRect(mx - bw / 2, my - bh / 2, bw, bh);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = ok ? '#aed581' : '#ef5350';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(mx - bw / 2, my - bh / 2, bw, bh);
+  // banner
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = ok ? '#aed581' : '#ef5350';
+  ctx.fillText(!afford ? `NEED ⚙${game.barricadeCost}` : !inRange ? 'TOO FAR' : `BUILD ⚙${game.barricadeCost}`, mx, my - bh / 2 - 10);
+  ctx.font = 'bold 15px monospace';
+  ctx.fillStyle = '#a1887f';
+  ctx.fillText('◧ BUILD MODE — click to place · [N] exit', view.w / 2, view.h - 200);
+  ctx.restore();
+}
+
 // BLACKOUT light mask: fill the screen with night, then punch holes in it
 // for every light source. Light = safety, but generators scream your location.
 function drawBlackoutMask() {
@@ -4727,7 +4850,7 @@ function drawHUD() {
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
   const keys = ownedList().map((w) => `[${WEAPONS[w].key}]${WEAPONS[w].name}`).join(' ');
-  ctx.fillText(`${keys}  [R]RELOAD [SPACE]DASH [B]GRAB [Z]BLADES [TAB]CHAR`, view.w - 24, view.h - 40);
+  ctx.fillText(`${keys}  [R]RELOAD [SPACE]DASH [B]GRAB [Z]BLADES [N]BUILD [TAB]CHAR`, view.w - 24, view.h - 40);
   // dash cooldown pip
   ctx.fillStyle = p.dashCooldown <= 0 ? '#80cbc4' : '#37474f';
   ctx.fillText(p.dashCooldown <= 0 ? 'DASH READY' : `DASH ${p.dashCooldown.toFixed(1)}s`, view.w - 24, view.h - 112);
@@ -6435,6 +6558,7 @@ function render(dt) {
       ctx.fillText(game.superBoss.super, view.w / 2, view.h * 0.78);
     }
   }
+  if (game.buildMode) drawBuildGhost();
   drawScreenBlood();
   drawEnemyArrows();
   drawHUD();
