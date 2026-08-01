@@ -824,6 +824,11 @@ function newGame() {
     killMarks: [],
     slashFx: [],
     blackout: gameMode === 'blackout',
+    survival: gameMode === 'blackout', // needs/injury sim rides with the dark
+    needs: { hunger: 100, thirst: 100, fatigue: 100 },
+    bleed: 0,
+    supplies: { food: 2, water: 2, bandage: 3 },
+    needWarnT: 0,
     generators: [],
     storyBeats: [],
     storyLine: null,
@@ -1384,6 +1389,12 @@ function damagePlayer(dmg) {
   addScreenBlood(1);
   spawnBlood(p.x, p.y, 8, '#c62828');
   g.dmgNumbers.push({ x: p.x, y: p.y - 20, txt: `-${Math.round(dmg)}`, color: '#ef5350', life: 0.8, vy: -50 });
+  // heavy hits open a bleeding wound — it keeps draining until you bandage it
+  if (g.survival && dmg >= 12 && Math.random() < 0.45 && g.bleed < 3) {
+    g.bleed++;
+    banner('BLEEDING', `wound open ×${g.bleed} — [Y] to treat`, '#ef5350');
+    g.dmgNumbers.push({ x: p.x, y: p.y - 40, txt: 'BLEEDING', color: '#ff1744', life: 1.4, vy: -55 });
+  }
 }
 
 // route ally damage through the partner's energy shield
@@ -1405,7 +1416,7 @@ function damageAlly(a, dmg) {
   }
 }
 
-const LOOT_TYPES = ['medkit', 'ammo', 'ammo', 'shield', 'rage', 'nade', 'dyna'];
+const LOOT_TYPES = ['medkit', 'ammo', 'ammo', 'shield', 'rage', 'nade', 'dyna', 'food', 'water', 'bandage'];
 
 function dropLoot(x, y, guaranteed = false) {
   if (!guaranteed && Math.random() > 0.12) return;
@@ -1416,6 +1427,15 @@ function dropLoot(x, y, guaranteed = false) {
 function applyPickup(type) {
   const g = game;
   const d = derived(char);
+  if (type === 'food' || type === 'water' || type === 'bandage') {
+    const key = type === 'bandage' ? 'bandage' : type;
+    g.supplies[key] = (g.supplies[key] || 0) + (type === 'bandage' ? 2 : 1);
+    const label = { food: '+1 RATIONS', water: '+1 WATER', bandage: '+2 BANDAGES' }[type];
+    const col = { food: '#aed581', water: '#4fc3f7', bandage: '#f8bbd0' }[type];
+    g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: label, color: col, life: 1.1, vy: -50 });
+    sfx.playScrapPickup();
+    return;
+  }
   if (type === 'medkit') {
     g.player.hp = Math.min(d.maxHp, g.player.hp + 35);
     g.dmgNumbers.push({ x: g.player.x, y: g.player.y - 24, txt: '+35 HP', color: '#81c784', life: 1, vy: -50 });
@@ -1560,7 +1580,12 @@ function update(dt) {
   const sprinting = (input.keys.has('shift') || gamepad.sprint) && moving && p.stamina > 0;
   if (sprinting) p.stamina = Math.max(0, p.stamina - dt / 2.5);
   else p.stamina = Math.min(1, p.stamina + dt / 4);
-  const spd = p.speed * d.moveMult * (sprinting ? p.sprintMult : 1);
+  let survPen = 1;
+  if (g.survival) {
+    if (g.needs.thirst < 25) survPen *= 0.82;   // parched: heavy legs
+    if (g.needs.fatigue < 25) survPen *= 0.88;  // exhausted
+  }
+  const spd = p.speed * d.moveMult * survPen * (sprinting ? p.sprintMult : 1);
 
   if (driving) {
     // the car drives itself forward — you steer and floor the nitro
@@ -1720,7 +1745,7 @@ function update(dt) {
       if (p.reserve[p.weapon] !== Infinity) p.reserve[p.weapon] -= take;
     }
   } else if ((wasPressed('r') || gpPressed('x')) && p.mags[p.weapon] < ws.magSize && p.reserve[p.weapon] > 0) {
-    p.reloading = ws.reloadTime * squadReloadMult();
+    p.reloading = ws.reloadTime * squadReloadMult() * (g.survival && g.needs.fatigue < 25 ? 1.35 : 1);
     sfx.playReload();
   }
 
@@ -1777,7 +1802,7 @@ function update(dt) {
         });
       }
       if (p.mags[p.weapon] === 0 && p.reserve[p.weapon] > 0) {
-        p.reloading = ws.reloadTime * squadReloadMult();
+        p.reloading = ws.reloadTime * squadReloadMult() * (g.survival && g.needs.fatigue < 25 ? 1.35 : 1);
         sfx.playReload();
       }
     }
@@ -2760,6 +2785,45 @@ function update(dt) {
     }
   }
   g.bombers = (g.bombers || []).filter((bm) => bm.life > 0);
+
+  // -- SURVIVAL SIM: needs decay, wounds bleed, [Y] uses the right supply
+  if (g.survival) {
+    const n = g.needs;
+    n.hunger = Math.max(0, n.hunger - dt * 0.42);
+    n.thirst = Math.max(0, n.thirst - dt * 0.62);
+    n.fatigue = Math.max(0, n.fatigue - dt * 0.33);
+    if (g.bleed > 0) {
+      p.hp -= g.bleed * 1.5 * dt;
+      if (Math.random() < dt * 3.5) spawnBlood(p.x, p.y, 1, '#8e0e0e');
+    }
+    if (n.hunger <= 0 || n.thirst <= 0) p.hp -= 1.4 * dt;
+    if (wasPressed('y')) {
+      const sup = g.supplies;
+      if (g.bleed > 0 && sup.bandage > 0) {
+        sup.bandage--; g.bleed--;
+        g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: 'WOUND BANDAGED', color: '#81c784', life: 1.2, vy: -50 });
+        sfx.playPurchase();
+      } else if (n.thirst < n.hunger && sup.water > 0) {
+        sup.water--; n.thirst = Math.min(100, n.thirst + 55);
+        g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: 'WATER +55', color: '#4fc3f7', life: 1.1, vy: -50 });
+        sfx.playScrapPickup();
+      } else if (sup.food > 0) {
+        sup.food--; n.hunger = Math.min(100, n.hunger + 60); n.fatigue = Math.min(100, n.fatigue + 15);
+        g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: 'RATIONS +60', color: '#aed581', life: 1.1, vy: -50 });
+        sfx.playScrapPickup();
+      } else {
+        sfx.playDenied();
+        g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: 'NO SUPPLIES', color: '#ef5350', life: 1, vy: -45 });
+      }
+    }
+    g.needWarnT -= dt;
+    if (g.needWarnT <= 0) {
+      g.needWarnT = 22;
+      if (n.thirst < 22) radio('echo', 'ECHO-6: "You sound dry. Find water before it starts costing you."', '#4fc3f7');
+      else if (n.hunger < 22) radio('echo', 'ECHO-6: "You have not eaten. That shake in your hands is real."', '#aed581');
+      else if (n.fatigue < 22) radio('echo', 'ECHO-6: "You are running on empty. Slow down or you will make a mistake."', '#ce93d8');
+    }
+  }
 
   // -- GENERATORS: pay scrap to fuel one; it lights a zone while it burns,
   // but the engine noise drags every nearby infected straight to it
@@ -4544,8 +4608,38 @@ function drawHUD() {
   ctx.fillStyle = '#ce93d8';
   ctx.fillText(`LV ${char.level}` + (char.unspent > 0 ? `  +${char.unspent} pts [TAB]` : ''), 20, 108);
 
+  // survival readout: needs bars, carried supplies, bleeding alarm
+  if (game.survival) {
+    const n = game.needs;
+    const rows = [
+      ['HUNGER', n.hunger, '#aed581'],
+      ['THIRST', n.thirst, '#4fc3f7'],
+      ['ENERGY', n.fatigue, '#ce93d8'],
+    ];
+    let ny = 132;
+    glass(12, ny - 8, 240, 96, 'rgba(120,150,170,0.35)');
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    for (const [label, val, col] of rows) {
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(70, ny + 2, 170, 8);
+      ctx.fillStyle = val < 25 ? '#ef5350' : col;
+      ctx.fillRect(70, ny + 2, 170 * Math.max(0, val / 100), 8);
+      ctx.fillStyle = val < 25 ? '#ff8a80' : '#b0bec5';
+      ctx.fillText(label, 20, ny + 1);
+      ny += 16;
+    }
+    const sup = game.supplies;
+    ctx.font = 'bold 11px monospace';
+    ctx.fillStyle = '#cfd8dc';
+    ctx.fillText(`🥫${sup.food}  💧${sup.water}  🩹${sup.bandage}   [Y] USE`, 20, ny + 4);
+    if (game.bleed > 0) {
+      ctx.fillStyle = Math.floor(performance.now() / 300) % 2 ? '#ff1744' : '#ef9a9a';
+      ctx.fillText(`⚠ BLEEDING ×${game.bleed}`, 20, ny + 20);
+    }
+  }
   // squad readout
-  let sy = 132;
+  let sy = game.survival ? 236 : 132;
   for (const a of game.allies) {
     ctx.fillStyle = a.down ? '#616161' : a.color;
     ctx.fillText(`${a.name} ${a.down ? 'DOWN' : Math.ceil(a.hp)}`, 20, sy);
@@ -5925,7 +6019,7 @@ function render(dt) {
     if (pk.t < 5 && Math.floor(pk.t * 6) % 2 === 0) continue;
     ctx.save();
     ctx.translate(pk.x, pk.y);
-    const colors = { medkit: '#ef5350', ammo: '#ffca28', shield: '#42a5f5', rage: '#ff7043', nade: '#9ccc65', dyna: '#ff7043' };
+    const colors = { medkit: '#ef5350', ammo: '#ffca28', shield: '#42a5f5', rage: '#ff7043', nade: '#9ccc65', dyna: '#ff7043', food: '#aed581', water: '#4fc3f7', bandage: '#f8bbd0' };
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(-11, -11, 22, 22);
     ctx.strokeStyle = colors[pk.type];
