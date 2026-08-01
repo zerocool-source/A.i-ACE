@@ -127,6 +127,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'lootcrate', 'barrier_scifi', 'pylon',
                     'explosion_hd', 'fighterjet', 'slash_fx', 'bloodburst',
                     'neon_kiosk', 'buzzsaw', 'severed_arm', 'severed_leg', 'blood_pool',
+                    'generator',
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -822,6 +823,8 @@ function newGame() {
     killT: 0,
     killMarks: [],
     slashFx: [],
+    blackout: gameMode === 'blackout',
+    generators: [],
     storyBeats: [],
     storyLine: null,
     objective: '',
@@ -975,6 +978,19 @@ function setupDrive() {
 
 function startLevel() {
   game = newGame();
+  // BLACKOUT: the grid is down. Scattered generators can be fuelled to light
+  // a zone — but a running generator is loud and pulls the horde to it.
+  if (game.blackout) {
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + Math.random();
+      const r = 420 + Math.random() * 620;
+      game.generators.push({
+        x: Math.max(80, Math.min(game.world.w - 80, game.world.w / 2 + Math.cos(a) * r)),
+        y: Math.max(80, Math.min(game.world.h - 80, game.world.h / 2 + Math.sin(a) * r)),
+        on: false, fuel: 0, cost: 60, radius: 300, noiseT: 0,
+      });
+    }
+  }
   // the opening scene: your squad talks through the level as you deploy
   if (gameMode === 'campaign' && LEVEL_CHATS[level().key]) {
     game.chatScript = [...LEVEL_CHATS[level().key]];
@@ -2745,6 +2761,46 @@ function update(dt) {
   }
   g.bombers = (g.bombers || []).filter((bm) => bm.life > 0);
 
+  // -- GENERATORS: pay scrap to fuel one; it lights a zone while it burns,
+  // but the engine noise drags every nearby infected straight to it
+  for (const gen of g.generators || []) {
+    const near = Math.hypot(p.x - gen.x, p.y - gen.y) < 80;
+    if (near && !gen.on && (wasPressed('f') || gpPressed('a'))) {
+      if (char.scrap >= gen.cost) {
+        char.scrap -= gen.cost;
+        saveCharacter(char);
+        gen.on = true;
+        gen.fuel = 45;
+        sfx.playPurchase();
+        banner('GENERATOR ONLINE', 'light up — but they HEAR it', '#ffd54f');
+        radio('echo', 'ECHO-6: "Power\'s up on your position. So is every ear in the county."', '#80cbc4');
+      } else {
+        sfx.playDenied();
+        g.dmgNumbers.push({ x: p.x, y: p.y - 24, txt: `NEED ⚙${gen.cost}`, color: '#ef5350', life: 1, vy: -40 });
+      }
+    }
+    if (gen.on) {
+      gen.fuel -= dt;
+      if (gen.fuel <= 0) {
+        gen.on = false;
+        banner('GENERATOR DRY', 'the dark comes back', '#90a4ae');
+      }
+      // engine noise: periodically drag nearby infected toward the sound
+      gen.noiseT -= dt;
+      if (gen.noiseT <= 0) {
+        gen.noiseT = 1.2;
+        for (const z of g.zombies) {
+          if (z.hp <= 0) continue;
+          const d = Math.hypot(z.x - gen.x, z.y - gen.y);
+          if (d < 900 && d > 1) {
+            z.x += ((gen.x - z.x) / d) * 26;
+            z.y += ((gen.y - z.y) / d) * 26;
+          }
+        }
+      }
+    }
+  }
+
   // -- locked doors: pay scrap to open, loot waits inside
   for (let i = g.props.length - 1; i >= 0; i--) {
     const pr = g.props[i];
@@ -4100,6 +4156,96 @@ function drawMinimap() {
   ctx.restore();
 }
 
+// BLACKOUT light mask: fill the screen with night, then punch holes in it
+// for every light source. Light = safety, but generators scream your location.
+function drawBlackoutMask() {
+  const p = game.player;
+  const px = p.x - cam.x, py = p.y - cam.y;
+  ctx.save();
+  ctx.fillStyle = 'rgba(3,4,9,0.86)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  ctx.globalCompositeOperation = 'destination-out';
+  // flashlight cone along your aim
+  const reach = 460, spread = 0.42;
+  const grad = ctx.createRadialGradient(px, py, 20, px, py, reach);
+  grad.addColorStop(0, 'rgba(0,0,0,1)');
+  grad.addColorStop(0.55, 'rgba(0,0,0,0.85)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.arc(px, py, reach, p.angle - spread, p.angle + spread);
+  ctx.closePath();
+  ctx.fill();
+  // a small always-on pool so you can see your own feet
+  const near = ctx.createRadialGradient(px, py, 6, px, py, 92);
+  near.addColorStop(0, 'rgba(0,0,0,0.95)');
+  near.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = near;
+  ctx.fillRect(px - 92, py - 92, 184, 184);
+  // running generators light their zone
+  for (const gen of game.generators || []) {
+    if (!gen.on) continue;
+    const gx = gen.x - cam.x, gy = gen.y - cam.y;
+    if (gx < -gen.radius || gx > view.w + gen.radius || gy < -gen.radius || gy > view.h + gen.radius) continue;
+    const flick = 1 + 0.04 * Math.sin(performance.now() / 70);
+    const gg = ctx.createRadialGradient(gx, gy, 10, gx, gy, gen.radius * flick);
+    gg.addColorStop(0, 'rgba(0,0,0,0.96)');
+    gg.addColorStop(0.6, 'rgba(0,0,0,0.6)');
+    gg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gg;
+    ctx.fillRect(gx - gen.radius, gy - gen.radius, gen.radius * 2, gen.radius * 2);
+  }
+  // fires and explosions throw their own light
+  for (const f2 of game.fires || []) {
+    const fx = f2.x - cam.x, fy = f2.y - cam.y, fr = f2.r * 2.6;
+    const fg = ctx.createRadialGradient(fx, fy, 4, fx, fy, fr);
+    fg.addColorStop(0, 'rgba(0,0,0,0.9)');
+    fg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(fx - fr, fy - fr, fr * 2, fr * 2);
+  }
+  for (const ex of game.explosions) {
+    const exx = ex.x - cam.x, exy = ex.y - cam.y, er = ex.r * 2.2;
+    const eg = ctx.createRadialGradient(exx, exy, 4, exx, exy, er);
+    eg.addColorStop(0, 'rgba(0,0,0,1)');
+    eg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = eg;
+    ctx.fillRect(exx - er, exy - er, er * 2, er * 2);
+  }
+  // muzzle flash briefly lights the room
+  if (p.muzzleFlash > 0) {
+    const mr = 240;
+    const mg = ctx.createRadialGradient(px, py, 8, px, py, mr);
+    mg.addColorStop(0, 'rgba(0,0,0,0.8)');
+    mg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = mg;
+    ctx.fillRect(px - mr, py - mr, mr * 2, mr * 2);
+  }
+  // additive pass: lit areas actually glow warm instead of just being less black
+  ctx.globalCompositeOperation = 'lighter';
+  const beam = ctx.createRadialGradient(px, py, 14, px, py, reach * 0.92);
+  beam.addColorStop(0, 'rgba(255,236,190,0.20)');
+  beam.addColorStop(0.5, 'rgba(255,226,160,0.09)');
+  beam.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = beam;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.arc(px, py, reach * 0.92, p.angle - spread, p.angle + spread);
+  ctx.closePath();
+  ctx.fill();
+  for (const gen of game.generators || []) {
+    if (!gen.on) continue;
+    const gx = gen.x - cam.x, gy = gen.y - cam.y;
+    const gl = ctx.createRadialGradient(gx, gy, 8, gx, gy, gen.radius);
+    gl.addColorStop(0, 'rgba(255,214,130,0.22)');
+    gl.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gl;
+    ctx.fillRect(gx - gen.radius, gy - gen.radius, gen.radius * 2, gen.radius * 2);
+  }
+  ctx.restore();
+}
+
 // STORY CARD: a cinematic letterboxed strip that types a beat out mid-fight.
 // The enemy VOICE gets a glitchy red card; allies get cool steel.
 const STORY_SPEAKERS = {
@@ -4509,6 +4655,12 @@ function drawHUD() {
     gameMode === 'tenk' ? `10,000 — ${game.survivalPool + game.zombies.length} LEFT` :
     `${lv.name} — WAVE ${game.wave}/${lv.waves}`;
   ctx.fillText(topLine, view.w / 2, 22);
+  if (game.blackout) {
+    const lit = (game.generators || []).filter((gn) => gn.on).length;
+    ctx.font = 'bold 11px monospace';
+    ctx.fillStyle = lit ? '#ffd54f' : '#78909c';
+    ctx.fillText(`🔦 BLACKOUT — GENERATORS RUNNING ${lit}/${(game.generators || []).length}  ·  [F] to fuel`, view.w / 2, 62);
+  }
   if (gameMode === 'campaign' && game.objective) {
     ctx.font = 'bold 11px monospace';
     ctx.fillStyle = '#ffca28';
@@ -4854,6 +5006,7 @@ const MODES = [
   { id: 'kill', label: '🔪 KILL MODE', desc: '90s · ∞ ammo · 2x dmg' },
   { id: 'die', label: '💀 DIE MODE', desc: '1 HP · 3x scrap' },
   { id: 'tenk', label: '10,000', desc: 'kill every last one' },
+  { id: 'blackout', label: '🔦 BLACKOUT', desc: 'county-wide dark · run generators' },
 ];
 
 // named mini-bosses cap waves 1 and 2 of every level (the SUPERBOSS owns wave 3)
@@ -5654,6 +5807,37 @@ function render(dt) {
     drawCorpse(co);
   }
   drawHiggs();
+  // generators: dark and silent, or humming with a lit halo
+  for (const gen of game.generators || []) {
+    ctx.save();
+    ctx.translate(gen.x, gen.y);
+    if (gen.on) {
+      const hum = 1 + 0.05 * Math.sin(performance.now() / 90);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const gg = ctx.createRadialGradient(0, 0, 4, 0, 0, 70);
+      gg.addColorStop(0, 'rgba(255,214,120,0.35)');
+      gg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gg;
+      ctx.fillRect(-70, -70, 140, 140);
+      ctx.restore();
+      ctx.scale(hum, hum);
+    }
+    if (SPRITES.generator) drawSpriteFit(SPRITES.generator, 54, 54);
+    else {
+      ctx.fillStyle = gen.on ? '#c9a227' : '#4a4a3a';
+      ctx.fillRect(-18, -14, 36, 28);
+    }
+    ctx.restore();
+    // prompt + fuel bar
+    const dp2 = Math.hypot(game.player.x - gen.x, game.player.y - gen.y);
+    if (dp2 < 150) {
+      ctx.font = 'bold 12px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = gen.on ? '#aed581' : char.scrap >= gen.cost ? '#ffd54f' : '#ef5350';
+      ctx.fillText(gen.on ? `RUNNING ${Math.ceil(gen.fuel)}s` : `[F] FUEL ⚙${gen.cost}`, gen.x, gen.y - 34);
+    }
+  }
   // supply crates: drifting down under canopy, then beckoning on the ground
   for (const dr of game.drops || []) {
     ctx.save();
@@ -6082,6 +6266,9 @@ function render(dt) {
   ctx.globalAlpha = 1;
   ctx.restore();
 
+  // BLACKOUT: the county is dark. Paint darkness, then carve light out of it
+  // with the flashlight cone, running generators, fires and muzzle flash.
+  if (game.blackout) drawBlackoutMask();
   // screen-space layers
   if (level().tint) {
     ctx.fillStyle = level().tint;
