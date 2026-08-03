@@ -128,6 +128,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'explosion_hd', 'fighterjet', 'slash_fx', 'bloodburst',
                     'neon_kiosk', 'buzzsaw', 'severed_arm', 'severed_leg', 'blood_pool',
                     'generator',
+                    ...['walker', 'runner', 'brute', 'exploder'].flatMap(
+                      (z) => [`${z}_s0`, `${z}_s1`, `${z}_s2`, `${z}_s3`]),
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -5590,74 +5592,239 @@ function briefingTotal() {
   return level().story.reduce((n, l) => n + l.length, 0);
 }
 
+// ---- CALL-OF-DUTY STYLE DEPLOYMENT / LOADING SCREEN -----------------------
+// Full-bleed mission art, an intel dossier that types itself out, the squad
+// roster with portraits, live asset-loading progress and a rotating tip rail.
+const OP_NAMES = {
+  city: 'OPERATION FIRST LIGHT', graveyard: 'OPERATION COLD GROUND',
+  sewer: 'OPERATION UNDERTOW', hospital: 'OPERATION PATIENT ZERO',
+  base: 'OPERATION LAST STAND', mall: 'OPERATION CLEARANCE',
+  subway: 'OPERATION THIRD RAIL', prison: 'OPERATION LOCKDOWN',
+  docks: 'OPERATION HIGH TIDE', rooftops: 'OPERATION DAYBREAK',
+};
+const LOAD_TIPS = [
+  'Hold [RMB] to open the weapon wheel — swapping mid-reload cancels it.',
+  '[B] grabs a zombie. [B] again hurls it — thrown bodies bowl through the crowd.',
+  '[Z] deploys BLADESTORM: razor discs orbit you and shred anything they touch.',
+  'Generators light a zone — and the engine noise drags every infected to it.',
+  'Combo x30 triggers KILL MODE. Combo x40 calls in air support.',
+  '[N] enters BUILD MODE. Barricades buy you seconds, and seconds decide nights.',
+  'Fight near CDR. HALE for +12% damage; near SGT. REYES for faster reloads.',
+  'Armor plates soak damage before your health does. Buy them early.',
+  '[Y] triages: bandages a wound first, then water or rations — whichever is worse.',
+  'Supply crates parachute in every 45-75s. Hack chips stack weapon damage.',
+];
+
 function drawLevelIntro() {
-  ctx.fillStyle = '#08090b';
-  ctx.fillRect(0, 0, view.w, view.h);
   const lv = level();
-  getImage(lv.ground); // prefetch so the arena ground is ready on deploy
-  const intro = getImage(lv.intro);
-  if (intro) drawCoverImage(intro);
-  const panelH = 270;
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(0, view.h - panelH, view.w, panelH);
   const cx = view.w / 2;
   const t = performance.now() / 1000;
+  getImage(lv.ground); // prefetch the arena ground so deploy is instant
+  const intro = getImage(lv.intro);
+
+  // hard clear: wipe the whole backing store so nothing from the previous
+  // screen can ghost through the mission art
   ctx.save();
-  ctx.textAlign = 'center';
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#05060a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+  if (intro) {
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    drawCoverImage(intro);
+    ctx.restore();
+  }
+  // cinematic grade: darken the edges, lift the centre
+  const vg = ctx.createLinearGradient(0, 0, 0, view.h);
+  vg.addColorStop(0, 'rgba(4,5,9,0.82)');
+  vg.addColorStop(0.42, 'rgba(4,5,9,0.35)');
+  vg.addColorStop(1, 'rgba(4,5,9,0.95)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, view.w, view.h);
+
+  ctx.save();
   ctx.textBaseline = 'top';
-  ctx.font = '16px monospace';
-  ctx.fillStyle = '#ef9a9a';
-  ctx.fillText(`LEVEL ${char.campaignLevel + 1} OF ${LEVELS.length}`, cx, view.h - panelH + 14);
-  ctx.font = 'bold 44px monospace';
+
+  // ---- header: operation codename + location strip ----
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#ef5350';
+  ctx.fillText(`MISSION ${String(char.campaignLevel + 1).padStart(2, '0')} / ${String(LEVELS.length).padStart(2, '0')}`, 44, 40);
+  ctx.font = `bold ${Math.min(46, view.w / 22)}px monospace`;
   ctx.fillStyle = '#fff';
   ctx.shadowColor = '#d32f2f';
-  ctx.shadowBlur = 22;
-  ctx.fillText(lv.name, cx, view.h - panelH + 38);
+  ctx.shadowBlur = 20;
+  ctx.fillText(OP_NAMES[lv.key] || 'OPERATION BLACKOUT', 44, 58);
   ctx.shadowBlur = 0;
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#b0bec5';
+  ctx.fillText(`${lv.name.toUpperCase()}  ·  BLACKOUT COUNTY  ·  0817 HOURS`, 46, 58 + Math.min(46, view.w / 22) + 8);
+  // red rule
+  ctx.fillStyle = '#d32f2f';
+  ctx.fillRect(44, 58 + Math.min(46, view.w / 22) + 30, 260, 3);
 
+  // ---- left: intel dossier, typed out ----
+  const dossierY = 58 + Math.min(46, view.w / 22) + 52;
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#ffca28';
+  ctx.fillText('◆ OBJECTIVE', 44, dossierY);
+  ctx.font = 'bold 15px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(OBJECTIVES[lv.key] || 'SURVIVE', 44, dossierY + 18);
+
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#80cbc4';
+  ctx.fillText('◆ INTEL', 44, dossierY + 50);
   let budget = briefingChars();
-  let yy = view.h - panelH + 98;
-  ctx.font = '15px monospace';
+  let yy = dossierY + 70;
+  ctx.font = '14px monospace';
+  const maxTextW = Math.min(620, view.w * 0.52);
   for (const line of lv.story) {
     if (budget <= 0) break;
     const shown = line.slice(0, budget);
     budget -= line.length;
-    ctx.fillStyle = line.startsWith('ECHO') || line.startsWith('"') ? '#80cbc4' : '#bdbdbd';
-    ctx.fillText(shown + (budget < 0 ? '▌' : ''), cx, yy);
-    yy += 24;
+    ctx.fillStyle = line.startsWith('ECHO') || line.startsWith('"') ? '#80cbc4' : '#cfd8dc';
+    // wrap long intel lines inside the dossier column
+    let rest = shown + (budget < 0 ? '▌' : '');
+    while (rest.length) {
+      let cut = rest.length;
+      while (cut > 1 && ctx.measureText(rest.slice(0, cut)).width > maxTextW) cut--;
+      if (cut < rest.length) {
+        const sp = rest.lastIndexOf(' ', cut);
+        if (sp > 12) cut = sp;
+      }
+      ctx.fillText(rest.slice(0, cut), 44, yy);
+      rest = rest.slice(cut).trimStart();
+      yy += 21;
+    }
+    yy += 4;
   }
 
-  // shield loadout: pick your core before deploying
+  // ---- threat readout ----
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#ef5350';
+  ctx.fillText('◆ THREAT ASSESSMENT', 44, view.h - 190);
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#cfd8dc';
+  ctx.fillText(`${lv.waves} WAVES   ·   ${lv.bosses} BOSS CONTACT${lv.bosses > 1 ? 'S' : ''}   ·   HOSTILE DENSITY ${'█'.repeat(Math.min(5, Math.round(lv.countMult * 2)))}`, 44, view.h - 170);
+
+  // ---- right: squad roster ----
+  const rx = view.w - 300;
+  if (view.w > 900) {
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillStyle = '#b39ddb';
+    ctx.fillText('◆ DEPLOYING SQUAD', rx, dossierY);
+    const roster = [{ id: char.heroId, tag: 'OPERATOR' }];
+    if (char.partnerId) roster.push({ id: char.partnerId, tag: 'PARTNER' });
+    let ry = dossierY + 20;
+    for (const r of roster) {
+      const hero = heroById(r.id);
+      const port = getImage(`portraits/${r.id}.png`);
+      ctx.fillStyle = 'rgba(10,14,20,0.75)';
+      ctx.fillRect(rx, ry, 256, 62);
+      ctx.strokeStyle = '#4a5560';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rx, ry, 256, 62);
+      if (port) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rx + 5, ry + 5, 52, 52);
+        ctx.clip();
+        ctx.drawImage(port, rx + 5, ry + 5, 52, 52);
+        ctx.restore();
+      }
+      ctx.font = 'bold 13px monospace';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(hero.name, rx + 68, ry + 12);
+      ctx.font = '11px monospace';
+      ctx.fillStyle = '#80cbc4';
+      ctx.fillText(r.tag, rx + 68, ry + 30);
+      ctx.fillStyle = '#90a4ae';
+      ctx.fillText(hero.role, rx + 68, ry + 44);
+      ry += 70;
+    }
+    // squadmates earned so far
+    const joined = SQUAD_JOIN.slice(0, Math.min(char.campaignLevel, SQUAD_JOIN.length));
+    if (joined.length) {
+      ctx.font = 'bold 11px monospace';
+      ctx.fillStyle = '#81c784';
+      ctx.fillText('ATTACHED', rx, ry + 4);
+      ctx.font = '12px monospace';
+      ctx.fillStyle = '#cfd8dc';
+      joined.forEach((jt, ji) => ctx.fillText(`· ${ALLY_DEFS[jt].name}`, rx, ry + 22 + ji * 16));
+    }
+  }
+
+  // ---- shield loadout chips ----
   if (char.shields.length > 1) {
-    const sw = 130, sh2 = 34, sg = 10;
-    const sx0 = cx - (char.shields.length * sw + (char.shields.length - 1) * sg) / 2;
+    const sw = 122, sh2 = 32, sg = 10;
+    const sx0 = 44;
+    const byy = view.h - 138;
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#90a4ae';
+    ctx.fillText('◆ SHIELD CORE', sx0, byy - 16);
     char.shields.forEach((core, ci) => {
       const bx = sx0 + ci * (sw + sg);
-      const byy = view.h - panelH - 46;
       const active = char.shieldType === core;
-      ctx.fillStyle = active ? 'rgba(20,40,30,0.95)' : 'rgba(16,18,22,0.9)';
+      ctx.fillStyle = active ? 'rgba(20,42,32,0.95)' : 'rgba(14,17,22,0.9)';
       ctx.fillRect(bx, byy, sw, sh2);
       ctx.strokeStyle = active ? SHIELD_COLORS[core] : '#3c4650';
-      ctx.lineWidth = active ? 3 : 1;
+      ctx.lineWidth = active ? 2.5 : 1;
       ctx.strokeRect(bx, byy, sw, sh2);
       ctx.font = 'bold 12px monospace';
       ctx.fillStyle = SHIELD_COLORS[core];
       ctx.textAlign = 'center';
-      ctx.fillText((core === 'health' ? 'GREEN' : core.toUpperCase()) + (active ? ' ✓' : ''), bx + sw / 2, byy + 11);
+      ctx.fillText((core === 'health' ? 'GREEN' : core.toUpperCase()) + (active ? ' ✓' : ''), bx + sw / 2, byy + 10);
       button(bx, byy, sw, sh2, () => {
         char.shieldType = core;
         saveCharacter(char);
       });
     });
   }
-  if (briefingChars() >= briefingTotal()) {
-    ctx.font = 'bold 20px monospace';
-    ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.4 * Math.sin(t * 3)})`;
-    ctx.fillText('CLICK TO DEPLOY', cx, view.h - 42);
+
+  // ---- bottom: loading bar + tip rail (the COD signature) ----
+  const barY = view.h - 76;
+  const barW = view.w - 88;
+  const assetFrac = spritesTotal ? spritesLoaded / spritesTotal : 1;
+  const textFrac = briefingTotal() ? Math.min(1, briefingChars() / briefingTotal()) : 1;
+  const frac = Math.min(assetFrac, textFrac);
+  const ready = frac >= 1;
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = '#78909c';
+  const tip = LOAD_TIPS[Math.floor(t / 5) % LOAD_TIPS.length];
+  ctx.fillText(`TIP  ·  ${tip}`, 44, barY - 22);
+  // track
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.fillRect(44, barY, barW, 6);
+  // fill
+  ctx.fillStyle = ready ? '#66bb6a' : '#d32f2f';
+  ctx.fillRect(44, barY, barW * frac, 6);
+  // moving scan highlight while loading
+  if (!ready) {
+    const sx = 44 + ((t * 260) % Math.max(1, barW * frac));
+    const sg2 = ctx.createLinearGradient(sx - 40, 0, sx + 40, 0);
+    sg2.addColorStop(0, 'rgba(255,255,255,0)');
+    sg2.addColorStop(0.5, 'rgba(255,255,255,0.55)');
+    sg2.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sg2;
+    ctx.fillRect(Math.max(44, sx - 40), barY, 80, 6);
+  }
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = ready ? '#a5d6a7' : '#ef9a9a';
+  ctx.fillText(ready ? 'DEPLOYMENT READY' : `LOADING MISSION DATA  ${Math.round(frac * 100)}%`, 44, barY + 14);
+  ctx.textAlign = 'right';
+  if (ready) {
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = `rgba(255,255,255,${0.55 + 0.45 * Math.sin(t * 3)})`;
+    ctx.fillText('CLICK TO DEPLOY  ▸', view.w - 44, barY + 8);
   } else {
     ctx.font = '12px monospace';
     ctx.fillStyle = '#757575';
-    ctx.fillText('click to skip', cx, view.h - 36);
+    ctx.fillText('click to skip briefing', view.w - 44, barY + 12);
   }
   ctx.restore();
 }
