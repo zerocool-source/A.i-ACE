@@ -132,6 +132,10 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                         'hazmat', 'screamer', 'spitter', 'crawler', 'granny',
                         'dog', 'stalker', 'boss', 'rogue',
                     ].flatMap((z) => [`${z}_s0`, `${z}_s1`, `${z}_s2`, `${z}_s3`]),
+                    'boss_atk', 'butcher_atk', 'dog_atk', 'stalker_atk',
+                    ...['bot_breacher', 'bot_scout', 'bot_juggernaut', 'bot_kamikaze',
+                        'bot_marksman', 'bot_enforcer', 'bot_overseer', 'bot_warframe',
+                    ].flatMap((z) => [`${z}_s0`, `${z}_s1`, `${z}_s2`, `${z}_s3`]),
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
@@ -3804,7 +3808,9 @@ function drawZombie(z) {
   const zaf = animFrames(z.type);
   let sprite = SPRITES[z.type];
   const moving = (z.walking || 0) > 4;
-  if (zaf && moving) {
+  if (z.windup && SPRITES[`${z.type}_atk`]) {
+    sprite = SPRITES[`${z.type}_atk`]; // dedicated strike pose
+  } else if (zaf && moving) {
     const ph = Math.floor((z.animDist || 0) / 20) % 4;
     sprite = zaf.cycleWalk[ph];
   } else if (zaf) {
@@ -6939,3 +6945,14 @@ function frameInner(now) {
   consumePressed();
 }
 requestAnimationFrame(frame);
+
+// UAT/debug handle: read-only introspection for automated tests
+window.__dz = {
+  state: () => state,
+  props: () => (game && game.props ? game.props.length : -1),
+  barricades: () => (game && game.props ? game.props.filter((p2) => p2.kind === 'barricade_built').length : -1),
+  scrap: () => char.scrap,
+  zombies: () => (game && game.zombies ? game.zombies.length : -1),
+  blackout: () => !!(game && game.blackout),
+  paused: () => paused,
+};
