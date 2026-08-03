@@ -5632,6 +5632,17 @@ function briefingTotal() {
 // ---- CALL-OF-DUTY STYLE DEPLOYMENT / LOADING SCREEN -----------------------
 // Full-bleed mission art, an intel dossier that types itself out, the squad
 // roster with portraits, live asset-loading progress and a rotating tip rail.
+const ACTS = [
+  { name: 'ACT I — THE LIGHTS GO OUT', levels: [0, 1] },
+  { name: 'ACT II — DEAD AIR', levels: [2, 3] },
+  { name: 'ACT III — THE COUNTY BELOW', levels: [4, 5] },
+  { name: 'ACT IV — THE LONG NIGHT', levels: [6, 7] },
+  { name: 'ACT V — THE LAST SIGNAL', levels: [8, 9] },
+];
+function actForLevel(i) {
+  return ACTS.find((a) => a.levels.includes(i)) || ACTS[0];
+}
+
 const OP_NAMES = {
   city: 'OPERATION FIRST LIGHT', graveyard: 'OPERATION COLD GROUND',
   sewer: 'OPERATION UNDERTOW', hospital: 'OPERATION PATIENT ZERO',
@@ -5687,7 +5698,7 @@ function drawLevelIntro() {
   ctx.textAlign = 'left';
   ctx.font = 'bold 12px monospace';
   ctx.fillStyle = '#ef5350';
-  ctx.fillText(`MISSION ${String(char.campaignLevel + 1).padStart(2, '0')} / ${String(LEVELS.length).padStart(2, '0')}`, 44, 40);
+  ctx.fillText(`${actForLevel(char.campaignLevel).name}   ·   MISSION ${String(char.campaignLevel + 1).padStart(2, '0')} / ${String(LEVELS.length).padStart(2, '0')}`, 44, 40);
   ctx.font = `bold ${Math.min(46, view.w / 22)}px monospace`;
   ctx.fillStyle = '#fff';
   ctx.shadowColor = '#d32f2f';
