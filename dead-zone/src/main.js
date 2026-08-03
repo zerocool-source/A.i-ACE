@@ -128,8 +128,10 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'explosion_hd', 'fighterjet', 'slash_fx', 'bloodburst',
                     'neon_kiosk', 'buzzsaw', 'severed_arm', 'severed_leg', 'blood_pool',
                     'generator',
-                    ...['walker', 'runner', 'brute', 'exploder'].flatMap(
-                      (z) => [`${z}_s0`, `${z}_s1`, `${z}_s2`, `${z}_s3`]),
+                    ...['walker', 'runner', 'brute', 'exploder', 'cop', 'butcher',
+                        'hazmat', 'screamer', 'spitter', 'crawler', 'granny',
+                        'dog', 'stalker', 'boss', 'rogue',
+                    ].flatMap((z) => [`${z}_s0`, `${z}_s1`, `${z}_s2`, `${z}_s3`]),
                     ...['player', 'player_f', 'hero_medic', 'hero_builder',
                         'hero_hacker', 'hero_cop', 'hero_biker', 'hero_engineer',
                         'hero_veteran', 'hero_athlete',
