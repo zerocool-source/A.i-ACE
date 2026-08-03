@@ -3824,7 +3824,10 @@ function drawZombie(z) {
     const step = (z.animDist || 0) * 0.09;
     const waddle = moving ? Math.sin(step) * 0.12 : Math.sin(z.wobble * 2) * 0.04;
     const bob = moving ? 1 + Math.abs(Math.sin(step)) * 0.09 : 1;
-    ctx.rotate(a + waddle + rear);
+    // upright top-down: mirror to face left/right, never spin the body flat
+    const face = Math.cos(a) < 0 ? -1 : 1;
+    ctx.scale(face, 1);
+    ctx.rotate(Math.sin(a) * 0.2 + waddle + rear);
     const zsq = Math.sin(step * 2) * (moving ? 0.06 : 0.03);
     const wScale = (z.windup ? 1.12 : 1) * bob;
     ctx.scale((1 + zsq) * wScale, (1 - zsq) * wScale);
@@ -3912,7 +3915,8 @@ function drawCivilian(c) {
   ctx.save();
   ctx.translate(c.x, c.y);
   entityShadow(c.radius);
-  ctx.rotate(c.angle + Math.sin(c.wobble * 2.4) * 0.16);
+  ctx.scale(Math.cos(c.angle) < 0 ? -1 : 1, 1);
+  ctx.rotate(Math.sin(c.angle) * 0.2 + Math.sin(c.wobble * 2.4) * 0.16);
   const sq = Math.sin(c.wobble * 4.8) * 0.04;
   ctx.scale(1 + sq, 1 - sq);
   const sprite = SPRITES[c.sprite];
@@ -3970,7 +3974,8 @@ function drawAlly(a) {
     return;
   }
   entityShadow(a.radius);
-  ctx.rotate(a.angle + Math.sin(a.walkPhase || 0) * 0.07);
+  ctx.scale(Math.cos(a.angle) < 0 ? -1 : 1, 1);
+  ctx.rotate(Math.sin(a.angle) * 0.2 + Math.sin(a.walkPhase || 0) * 0.07);
   const sq = Math.sin((a.walkPhase || 0) * 2) * 0.03;
   ctx.scale(1 + sq, 1 - sq);
   const aBase = a.sprite || a.type;
@@ -4051,9 +4056,12 @@ function drawPlayer() {
   const strideT = ((p.animDist || 0) % 30) / 30;
   const hop = 1 + Math.abs(Math.sin(strideT * Math.PI)) * 0.05 * Math.min(1, Math.hypot(p.vx, p.vy) / 220);
   const rock = Math.sin(p.walkPhase) * 0.02;
-  ctx.rotate(p.angle + rock);
-  ctx.scale(hop, hop);
   if (game.time < p.invulnUntil) ctx.globalAlpha = 0.55; // dash ghosting
+  ctx.save();
+  // upright hero: mirror to face the aim side instead of spinning flat
+  const pFace = Math.cos(p.angle) < 0 ? -1 : 1;
+  ctx.scale(pFace * hop, hop);
+  ctx.rotate(Math.sin(p.angle) * 0.16 + rock);
   const spriteName = heroById(char.heroId).sprite;
   const spd2 = Math.hypot(p.vx, p.vy);
   const af = animFrames(spriteName);
@@ -4076,7 +4084,9 @@ function drawPlayer() {
     ctx.fillStyle = '#90a4ae';
     ctx.fillRect(p.radius - 4, -3, 18, 6);
   }
+  ctx.restore();
   if (p.muzzleFlash > 0) {
+    ctx.rotate(p.angle); // the flash still tracks the aim; only the body stays upright
     if (p.weapon === 'flamer' && SPRITES.flamecone) {
       const ff = 0.9 + 0.25 * Math.sin(performance.now() / 35);
       ctx.save();
