@@ -5282,8 +5282,11 @@ function drawLevelSelect() {
   ctx.fillStyle = '#fff';
   ctx.shadowColor = '#d32f2f';
   ctx.shadowBlur = 18;
-  ctx.fillText('SELECT DEPLOYMENT', cx, 28);
+  ctx.fillText('CAMPAIGN — OPERATIONS', cx, 22);
   ctx.shadowBlur = 0;
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#78909c';
+  ctx.fillText('BLACKOUT COUNTY  ·  SELECT YOUR DEPLOYMENT', cx, 56);
 
   const n = LEVELS.length;
   const cols = 5;
@@ -5310,21 +5313,55 @@ function drawLevelSelect() {
       ctx.drawImage(art, x + cw / 2 - (art.naturalWidth * s) / 2, yRow + chh / 2 - (art.naturalHeight * s) / 2, art.naturalWidth * s, art.naturalHeight * s);
       ctx.globalAlpha = 1;
     }
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(x, yRow + chh - 74, cw, 74);
+    // dossier grade: darken toward the bottom for the text block
+    const cg = ctx.createLinearGradient(0, yRow, 0, yRow + chh);
+    cg.addColorStop(0, 'rgba(4,5,9,0.18)');
+    cg.addColorStop(0.55, 'rgba(4,5,9,0.30)');
+    cg.addColorStop(1, 'rgba(4,5,9,0.92)');
+    ctx.fillStyle = cg;
+    ctx.fillRect(x, yRow, cw, chh);
+    // MISSION tag, top-left
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 9px monospace';
+    ctx.fillStyle = unlocked ? '#ef5350' : '#546e7a';
+    ctx.fillText(`MISSION ${String(i + 1).padStart(2, '0')}`, x + 8, yRow + 8);
+    // cleared stamp
+    const cleared = i < (char.maxCampaign || 0);
+    if (cleared) {
+      ctx.textAlign = 'right';
+      ctx.font = 'bold 10px monospace';
+      ctx.fillStyle = '#66bb6a';
+      ctx.fillText('✓ CLEARED', x + cw - 8, yRow + 8);
+    }
     ctx.restore();
-    ctx.strokeStyle = focused ? '#ffd54f' : unlocked ? '#546e7a' : '#2c343c';
+    // frame + red accent underline on focus
+    ctx.strokeStyle = focused ? '#ffd54f' : unlocked ? '#4a5560' : '#242b32';
     ctx.lineWidth = focused ? 3 : 1;
     ctx.strokeRect(x, yRow, cw, chh);
-    ctx.textAlign = 'center';
-    ctx.font = 'bold 13px monospace';
-    ctx.fillStyle = unlocked ? '#fff' : '#546e7a';
-    ctx.fillText(`LEVEL ${i + 1}`, x + cw / 2, yRow + chh - 64);
+    if (focused) {
+      ctx.fillStyle = '#d32f2f';
+      ctx.fillRect(x, yRow + chh - 3, cw, 3);
+    }
+    // operation codename + name + threat blocks
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillStyle = unlocked ? '#ffca28' : '#546e7a';
+    ctx.fillText(unlocked ? (OP_NAMES[lv.key] || 'OPERATION') : '🔒 CLASSIFIED', x + 8, yRow + chh - 58, cw - 16);
     ctx.font = 'bold 12px monospace';
-    ctx.fillText(unlocked ? lv.name : '🔒 LOCKED', x + cw / 2, yRow + chh - 47, cw - 10);
-    ctx.font = '10px monospace';
-    ctx.fillStyle = '#90a4ae';
-    if (unlocked) ctx.fillText(`${lv.waves} waves · ${lv.bosses} boss${lv.bosses > 1 ? 'es' : ''} · 3 secrets`, x + cw / 2, yRow + chh - 28, cw - 10);
+    ctx.fillStyle = unlocked ? '#fff' : '#546e7a';
+    ctx.fillText(unlocked ? lv.name : 'LOCKED', x + 8, yRow + chh - 43, cw - 16);
+    if (unlocked) {
+      ctx.font = '9px monospace';
+      ctx.fillStyle = '#90a4ae';
+      ctx.fillText(`${lv.waves} WAVES · ${lv.bosses} BOSS${lv.bosses > 1 ? 'ES' : ''}`, x + 8, yRow + chh - 27);
+      // threat density blocks, bottom-right
+      const th = Math.min(5, Math.round(lv.countMult * 2));
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#ef5350';
+      ctx.font = '9px monospace';
+      ctx.fillText('█'.repeat(th) + '░'.repeat(5 - th), x + cw - 8, yRow + chh - 27);
+    }
+    ctx.textAlign = 'center';
     button(x, yRow, cw, chh, () => {
       gameMode = 'campaign';
       char.campaignLevel = i;
