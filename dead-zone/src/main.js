@@ -3824,10 +3824,8 @@ function drawZombie(z) {
     const step = (z.animDist || 0) * 0.09;
     const waddle = moving ? Math.sin(step) * 0.12 : Math.sin(z.wobble * 2) * 0.04;
     const bob = moving ? 1 + Math.abs(Math.sin(step)) * 0.09 : 1;
-    // upright top-down: mirror to face left/right, never spin the body flat
-    const face = Math.cos(a) < 0 ? -1 : 1;
-    ctx.scale(face, 1);
-    ctx.rotate(Math.sin(a) * 0.2 + waddle + rear);
+    // overhead art rotates to face its target like a proper top-down shooter
+    ctx.rotate(a + waddle + rear);
     const zsq = Math.sin(step * 2) * (moving ? 0.06 : 0.03);
     const wScale = (z.windup ? 1.12 : 1) * bob;
     ctx.scale((1 + zsq) * wScale, (1 - zsq) * wScale);
@@ -3915,8 +3913,7 @@ function drawCivilian(c) {
   ctx.save();
   ctx.translate(c.x, c.y);
   entityShadow(c.radius);
-  ctx.scale(Math.cos(c.angle) < 0 ? -1 : 1, 1);
-  ctx.rotate(Math.sin(c.angle) * 0.2 + Math.sin(c.wobble * 2.4) * 0.16);
+  ctx.rotate(c.angle + Math.sin(c.wobble * 2.4) * 0.16);
   const sq = Math.sin(c.wobble * 4.8) * 0.04;
   ctx.scale(1 + sq, 1 - sq);
   const sprite = SPRITES[c.sprite];
@@ -3974,8 +3971,7 @@ function drawAlly(a) {
     return;
   }
   entityShadow(a.radius);
-  ctx.scale(Math.cos(a.angle) < 0 ? -1 : 1, 1);
-  ctx.rotate(Math.sin(a.angle) * 0.2 + Math.sin(a.walkPhase || 0) * 0.07);
+  ctx.rotate(a.angle + Math.sin(a.walkPhase || 0) * 0.07);
   const sq = Math.sin((a.walkPhase || 0) * 2) * 0.03;
   ctx.scale(1 + sq, 1 - sq);
   const aBase = a.sprite || a.type;
@@ -4058,10 +4054,9 @@ function drawPlayer() {
   const rock = Math.sin(p.walkPhase) * 0.02;
   if (game.time < p.invulnUntil) ctx.globalAlpha = 0.55; // dash ghosting
   ctx.save();
-  // upright hero: mirror to face the aim side instead of spinning flat
-  const pFace = Math.cos(p.angle) < 0 ? -1 : 1;
-  ctx.scale(pFace * hop, hop);
-  ctx.rotate(Math.sin(p.angle) * 0.16 + rock);
+  // overhead art rotates with the aim like a proper top-down shooter
+  ctx.rotate(p.angle + rock);
+  ctx.scale(hop, hop);
   const spriteName = heroById(char.heroId).sprite;
   const spd2 = Math.hypot(p.vx, p.vy);
   const af = animFrames(spriteName);
