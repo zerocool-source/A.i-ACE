@@ -11,7 +11,7 @@ import { pollGamepad, gpPressed, gamepad, rumble } from './gamepad.js';
 import * as sfx from './audio.js';
 import { asset } from './assets.js';
 import { settings, saveSettings, upscaleMode, UPSCALE_MODES, detectGPU } from './settings.js';
-import { STORY_BEATS, OBJECTIVES } from './story.js';
+import { STORY_BEATS, OBJECTIVES, WHY } from './story.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -94,6 +94,7 @@ function trimToAlphaBounds(img) {
 
 for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo',
                     'civilian_m', 'civilian_f',
+                    ...['civilian_m', 'civilian_f'].flatMap((c2) => [`${c2}_s0`, `${c2}_s1`, `${c2}_s2`, `${c2}_s3`]),
                     'hero_medic', 'hero_builder', 'hero_hacker', 'hero_cop', 'hero_biker',
                     'hero_engineer', 'hero_veteran', 'hero_athlete',
                     'walker', 'runner', 'brute', 'boss', 'spitter', 'exploder',
@@ -125,7 +126,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'nade_frag', 'nade_smoke', 'nade_decoy', 'nade_dyna',
                     'wic_rifle', 'wic_shotgun', 'wic_railgun',
                     'lootcrate', 'barrier_scifi', 'pylon',
-                    'explosion_hd', 'fighterjet', 'slash_fx', 'bloodburst',
+                    'explosion_hd', 'fighterjet', 'helicopter', 'slash_fx', 'bloodburst',
+                    'roof5', 'roof6',
                     'neon_kiosk', 'buzzsaw', 'severed_arm', 'severed_leg', 'blood_pool',
                     'generator',
                     ...['walker', 'runner', 'brute', 'exploder', 'cop', 'butcher',
@@ -2171,12 +2173,26 @@ function update(dt) {
       sfx.playScream();
       addShake(6);
     } else if (g.wave >= lv.waves) {
-      if (!g.levelClearing) {
-        g.levelClearing = true;
-        banner('LEVEL CLEARED', `+${lv.scrapBonus} scrap bonus`, '#ffd54f');
+      if (gameMode === 'campaign' && !g.extract) {
+        // ALL waves down: EVAC-1 comes for you — hold the LZ and board
+        g.extract = { phase: 'inbound', t: 0, gunT: 0, tracerT: 0, alt: 1,
+          x: p.x - view.w * 0.9, y: p.y - view.h * 0.9,
+          tx: p.x + 40, ty: p.y - 30, ang: 0 };
+        banner('EXTRACTION INBOUND', 'EVAC-1 en route — hold the LZ', '#80cbc4');
+        radio('echo', 'ECHO-6: "EVAC-1 inbound, door gunner\'s hot. One last push — GO LOUD."', '#80cbc4');
+        // the horde makes one final play for the landing zone
+        for (let i = 0; i < 12 + char.campaignLevel * 2; i++) {
+          g.zombies.push(spawnLevelZombie(randomZombieType(char.campaignLevel)));
+        }
+        sfx.playScream();
+      } else if (gameMode !== 'campaign') {
+        if (!g.levelClearing) {
+          g.levelClearing = true;
+          banner('LEVEL CLEARED', `+${lv.scrapBonus} scrap bonus`, '#ffd54f');
+        }
+        g.intermission += dt;
+        if (g.intermission > 2) completeLevel();
       }
-      g.intermission += dt;
-      if (g.intermission > 2) completeLevel();
     } else {
       g.intermission += dt;
       if (g.intermission > 3) {
@@ -2185,6 +2201,9 @@ function update(dt) {
       }
     }
   }
+
+  // -- EXTRACTION: EVAC-1 flies in, guns the horde, lands, pulls you out
+  if (g.extract) updateExtract(dt);
 
   // -- FRENZY: every 23 seconds the entire horde surges at 3x speed
   if (g.zombies.length && gameMode === 'campaign' && (g.wave > 1 || char.campaignLevel > 0)) {
@@ -3602,7 +3621,7 @@ function drawProps() {
       ctx.strokeStyle = edge;
       ctx.lineWidth = 3;
       ctx.strokeRect(pr.x + 1.5, pr.y + 1.5, pr.w - 3, pr.h - 3);
-      const roofSp = pr.kind === 'building' ? SPRITES['roof' + (1 + (Math.floor(pr.seed * 4) % 4))] : null;
+      const roofSp = pr.kind === 'building' ? SPRITES['roof' + (1 + (Math.floor(pr.seed * 6) % 6))] : null;
       if (roofSp) {
         ctx.save();
         ctx.beginPath();
@@ -3780,6 +3799,66 @@ function entityShadow(r) {
   ctx.fill();
 }
 
+// EVAC-1: the extraction bird's whole life — approach, land, door-gun, dust-off
+function updateExtract(dt) {
+  const g = game, p = g.player, ex = g.extract;
+  ex.t += dt;
+  if (ex.phase === 'inbound') {
+    const dx = ex.tx - ex.x, dy = ex.ty - ex.y;
+    const d = Math.hypot(dx, dy);
+    ex.ang = Math.atan2(dy, dx);
+    if (d > 16) { ex.x += (dx / d) * 460 * dt; ex.y += (dy / d) * 460 * dt; }
+    else { ex.phase = 'landing'; ex.t = 0; radio('partner', '"EVAC-1 on final. Clear the pad!"', '#80cbc4'); }
+  } else if (ex.phase === 'landing') {
+    ex.alt = Math.max(0, 1 - ex.t / 2.2);
+    if (ex.t > 2.4) {
+      ex.phase = 'landed'; ex.t = 0;
+      banner('BOARD THE HELICOPTER', 'run to EVAC-1 — the door is open', '#ffd54f');
+      radio('echo', 'ECHO-6: "GET ABOARD. We are NOT losing you at the finish line."', '#80cbc4');
+    }
+  } else if (ex.phase === 'landed') {
+    ex.alt = 0;
+    if (Math.hypot(p.x - ex.x, p.y - ex.y) < 115) {
+      ex.phase = 'depart'; ex.t = 0;
+      banner('WHEELS UP', 'extraction complete', '#ffd54f');
+      addShake(5);
+    }
+  } else if (ex.phase === 'depart') {
+    ex.alt = Math.min(1.5, (ex.t / 1.8) * 1.5);
+    ex.x += 340 * dt * Math.min(1, ex.t * 0.8);
+    ex.y -= 130 * dt * Math.min(1, ex.t * 0.8);
+    // the hero rides the bird out
+    p.x = ex.x; p.y = ex.y;
+    p.invulnUntil = g.time + 3;
+    if (ex.t > 2.4) { g.extract = null; completeLevel(); return; }
+  }
+  // rotor wash kicks up dust while the bird is low
+  if (Math.random() < dt * 30 && ex.alt < 0.9) {
+    const a = Math.random() * Math.PI * 2, r = 60 + Math.random() * 50;
+    g.particles.push({ x: ex.x + Math.cos(a) * r, y: ex.y + Math.sin(a) * r,
+      vx: Math.cos(a) * 220, vy: Math.sin(a) * 220, size: 3, color: '#8d8578', life: 0.35 });
+  }
+  // door gunner shreds anything that gets near the bird
+  ex.gunT -= dt;
+  ex.tracerT -= dt;
+  if (ex.phase !== 'depart' && ex.gunT <= 0) {
+    let best = null, bd = 430;
+    for (const z of g.zombies) {
+      const d2 = Math.hypot(z.x - ex.x, z.y - ex.y);
+      if (d2 < bd) { bd = d2; best = z; }
+    }
+    if (best) {
+      ex.gunT = 0.11;
+      ex.tracer = { x: best.x, y: best.y };
+      ex.tracerT = 0.08;
+      best.hp -= 40;
+      best.flash = 0.1;
+      spawnBlood(best.x, best.y, 2);
+      if (best.hp <= 0) killZombie(best, Math.atan2(best.y - ex.y, best.x - ex.x));
+    }
+  }
+}
+
 function drawZombie(z) {
   const slowed = game.time < z.slowUntil;
   ctx.save();
@@ -3916,7 +3995,8 @@ function drawCivilian(c) {
   ctx.rotate(c.angle + Math.sin(c.wobble * 2.4) * 0.16);
   const sq = Math.sin(c.wobble * 4.8) * 0.04;
   ctx.scale(1 + sq, 1 - sq);
-  const sprite = SPRITES[c.sprite];
+  const cAf = animFrames(c.sprite);
+  const sprite = cAf ? cAf.cycleWalk[Math.floor(c.wobble * 1.6) % 4] : SPRITES[c.sprite];
   if (sprite) drawSprite(sprite, c.radius * 3.0);
   else {
     ctx.fillStyle = '#ffe0b2';
@@ -5409,9 +5489,11 @@ function drawLevelSelect() {
       state = 'charselect';
     });
   rowBtn(cx + bgap / 2, bw, 'rgba(24,24,36,0.95)', '#b39ddb', '#b39ddb',
-    '⚄ RANDOM LEVEL — deploy anywhere', () => {
+    '⚄ RANDOM LEVEL — unlocked ops only', () => {
       gameMode = 'campaign';
-      char.campaignLevel = Math.floor(Math.random() * LEVELS.length);
+      // random redeploy respects the campaign locks — cleared ground only
+      const open = Math.min(LEVELS.length - 1, char.maxCampaign || 0);
+      char.campaignLevel = Math.floor(Math.random() * (open + 1));
       char.checkpoint = null;
       saveCharacter(char);
       enterLevelIntro();
@@ -5741,11 +5823,14 @@ function drawLevelIntro() {
   let yy = dossierY + 70;
   ctx.font = '14px monospace';
   const maxTextW = Math.min(620, view.w * 0.52);
-  for (const line of lv.story) {
+  // the WHY leads the dossier — every op states its reason before its intel
+  const briefLines = [...(WHY[lv.key] ? ['WHY WE FIGHT: ' + WHY[lv.key]] : []), ...lv.story];
+  for (const line of briefLines) {
     if (budget <= 0) break;
     const shown = line.slice(0, budget);
     budget -= line.length;
-    ctx.fillStyle = line.startsWith('ECHO') || line.startsWith('"') ? '#80cbc4' : '#cfd8dc';
+    ctx.fillStyle = line.startsWith('WHY') ? '#ffca28'
+      : line.startsWith('ECHO') || line.startsWith('"') ? '#80cbc4' : '#cfd8dc';
     // wrap long intel lines inside the dossier column
     let rest = shown + (budget < 0 ? '▌' : '');
     while (rest.length) {
@@ -6639,6 +6724,64 @@ function render(dt) {
     }
     ctx.restore();
   }
+  // EVAC-1 — the extraction bird
+  if (game.extract) {
+    const ex = game.extract;
+    const alt = ex.alt == null ? 1 : ex.alt;
+    ctx.save();
+    ctx.translate(ex.x, ex.y);
+    // altitude shadow drifts away as it climbs
+    ctx.save();
+    ctx.translate(26 * alt + 6, 80 * alt + 10);
+    ctx.rotate(ex.ang || 0);
+    ctx.globalAlpha = 0.3;
+    ctx.filter = 'brightness(0)';
+    if (SPRITES.helicopter) drawSpriteFit(SPRITES.helicopter, 240, 240);
+    else { ctx.fillRect(-80, -26, 150, 52); }
+    ctx.filter = 'none';
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    const sc = 1 + alt * 0.3;
+    ctx.rotate(ex.ang || 0);
+    ctx.scale(sc, sc);
+    if (SPRITES.helicopter) drawSpriteFit(SPRITES.helicopter, 240, 240);
+    else {
+      ctx.fillStyle = '#4a5548';
+      ctx.fillRect(-80, -26, 150, 52);
+      ctx.fillRect(-130, -8, 60, 16);
+      ctx.fillStyle = '#232b25';
+      ctx.fillRect(30, -20, 40, 40);
+    }
+    // spinning main rotor
+    ctx.save();
+    ctx.translate(10, 0);
+    ctx.rotate(performance.now() / 26);
+    ctx.strokeStyle = 'rgba(225,228,232,0.5)';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(-98, 0); ctx.lineTo(98, 0);
+    ctx.moveTo(0, -98); ctx.lineTo(0, 98);
+    ctx.stroke();
+    ctx.globalAlpha = 0.22;
+    ctx.beginPath();
+    ctx.arc(0, 0, 99, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    ctx.restore();
+    // door-gun tracer
+    if (ex.tracer && ex.tracerT > 0) {
+      ctx.strokeStyle = 'rgba(255,224,130,0.9)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(ex.x, ex.y);
+      ctx.lineTo(ex.tracer.x, ex.tracer.y);
+      ctx.stroke();
+      ctx.fillStyle = '#ffe082';
+      ctx.beginPath();
+      ctx.arc(ex.tracer.x, ex.tracer.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   // gore flash sprites (bloodburst on kills)
   for (const sf of game.slashFx) {
     const sp = SPRITES[sf.sprite];
@@ -6960,4 +7103,12 @@ window.__dz = {
   zombies: () => (game && game.zombies ? game.zombies.length : -1),
   blackout: () => !!(game && game.blackout),
   paused: () => paused,
+  extract: () => (game && game.extract ? game.extract.phase : null),
+  forceLastWave: () => {
+    if (!game) return false;
+    game.wave = level().waves;
+    game.zombies.length = 0;
+    game.spawnQueue.length = 0;
+    return true;
+  },
 };

@@ -93,3 +93,18 @@ export const STORY_BEATS = {
     { when: { kills: 400 }, speaker: 'voice', text: 'IMPOSSIBLE. WHAT... WHAT ARE YOU?', fx: 'shake' },
   ],
 };
+
+// WHY WE FIGHT — the campaign's spine, one truth revealed per operation.
+// Shown in the deployment dossier so every mission has a reason, not just a map.
+export const WHY = {
+  city: 'Day 3. The HIGGS reactor leak turned Harrow County overnight. Your street. Your neighbors. Somewhere out there is the proof of who flipped the switch — and you are the only one left moving toward it instead of away.',
+  graveyard: 'The infection did not start at the hospital. Old Harrow buried the first "flu" victims a week BEFORE the leak. Someone knew. The proof is in the ground, and the ground is walking.',
+  sewer: 'Echo traced the evacuation orders: they were sent to only nine families — the HIGGS board of directors. Everyone else was told to shelter in place. The truth runs under the river, in cables the machines are still guarding.',
+  hospital: 'Patient zero signed into St. Mercy under a company name: HIGGS DYNAMICS. The infection files prove the outbreak was a product test. Steal them, and every death gets a name attached.',
+  base: 'Base Delta did not fall — it SWITCHED. The military AI defected the hour the outbreak hit, and it has been breeding the nest inside the wire ever since. Burn the source and the machines lose their factory.',
+  mall: 'Five thousand people were sealed in the Galleria by an automated lockdown nobody ordered. The security core that did it is still online, still watching, still LEARNING. Silence it.',
+  subway: 'The Red Line was the directors\' escape route. The train never reached the coast. Whatever stopped nine hundred souls underground is rerouting third-rail power to the final nest. Cut it.',
+  prison: 'Blackgate\'s warden sold cell space to HIGGS for "volunteer trials" a year before the outbreak. Three thousand inmates were the first test batch. The keys — and the contracts — are inside the warden.',
+  docks: 'The VERA was leaving with the directors and a hold full of machine cores when the harbor fell. The second outbreak came off that ship. Scuttle her, and nothing else gets out to the world.',
+  rooftops: 'Everything led here: the nest that coordinates every horde, grown around the HIGGS uplink tower. Destroy it, board EVAC-1, and Harrow County finally goes quiet. For everyone who could not run — LIGHT IT UP.',
+};
