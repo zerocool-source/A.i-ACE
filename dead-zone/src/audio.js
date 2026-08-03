@@ -398,19 +398,31 @@ function playNextTrack() {
   }
   const file = playlist[playlistIndex % playlist.length];
   playlistIndex++;
+  if (musicEl) {
+    // never let two tracks overlap — kill the old element before starting new
+    musicEl.onended = musicEl.onerror = null;
+    musicEl.pause();
+  }
   musicEl = new Audio(asset('audio/' + file));
   musicEl.volume = 0.4;
-  musicEl.addEventListener('ended', () => {
+  musicEl.onended = () => {
     failedTracks = 0;
     playNextTrack();
-  });
+  };
   // skip tracks that 404 so the playlist can be pre-filled before the
   // mp3s are dropped in
-  musicEl.addEventListener('error', () => {
+  musicEl.onerror = () => {
     failedTracks++;
     playNextTrack();
+  };
+  musicEl.play().catch(() => {
+    // autoplay policy refused: retry from the next REAL user gesture
+    const retry = () => {
+      if (musicEl) musicEl.play().catch(() => {});
+    };
+    window.addEventListener('pointerdown', retry, { once: true });
+    window.addEventListener('keydown', retry, { once: true });
   });
-  musicEl.play().catch(() => {});
 }
 
 function startAmbientLoop() {
@@ -456,9 +468,13 @@ function startAmbientLoop() {
   setTimeout(pulse, 1200);
 }
 
+let musicStarting = false;
 export async function startMusic() {
   ac();
-  if (musicEl || ambientNodes.length) return;
+  // the async playlist fetch leaves a gap where a second caller could pass
+  // the element check and start a second overlapping track — gate it hard
+  if (musicStarting || musicEl || ambientNodes.length) return;
+  musicStarting = true;
   playlist = await tryLoadPlaylist();
   if (playlist) playNextTrack();
   else startAmbientLoop();
