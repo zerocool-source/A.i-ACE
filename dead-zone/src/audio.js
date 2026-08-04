@@ -56,7 +56,7 @@ const GUNSHOT_RATES = {
   magnum: 0.82, minigun: 1.3, flak: 0.62, railgun: 0.5,
 };
 
-export function playGunshot(weapon) {
+export function playGunshot(weapon, vol = 1) {
   const c = ac();
   const t = c.currentTime;
   if (!gunshotTried) loadGunshotSample();
@@ -65,7 +65,7 @@ export function playGunshot(weapon) {
     src.buffer = gunshotBuf;
     src.playbackRate.value = (GUNSHOT_RATES[weapon] ?? 1) * (0.95 + Math.random() * 0.1);
     const g = c.createGain();
-    g.gain.value = weapon === 'smg' || weapon === 'minigun' ? 0.5 : 0.8;
+    g.gain.value = (weapon === 'smg' || weapon === 'minigun' ? 0.5 : 0.8) * vol;
     src.connect(g).connect(master);
     src.start(t);
     return;
@@ -77,6 +77,7 @@ export function playGunshot(weapon) {
     shotgun: { cutoff: 900, dur: 0.32, vol: 0.7 },
     smg: { cutoff: 3600, dur: 0.09, vol: 0.35 },
   }[weapon] || { cutoff: 2200, dur: 0.15, vol: 0.5 };
+  profile.vol *= vol;
 
   const src = c.createBufferSource();
   src.buffer = noiseBuffer(profile.dur);

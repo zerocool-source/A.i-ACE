@@ -130,6 +130,7 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'wic_rifle', 'wic_shotgun', 'wic_railgun',
                     'lootcrate', 'barrier_scifi', 'pylon',
                     'explosion_hd', 'fighterjet', 'helicopter', 'slash_fx', 'bloodburst',
+                    'bloodburst2', 'comboburst', 'gib1', 'gib2', 'gib3', 'gib4',
                     'roof5', 'roof6',
                     'neon_kiosk', 'buzzsaw', 'severed_arm', 'severed_leg', 'blood_pool',
                     'generator',
@@ -909,12 +910,16 @@ function newGame() {
       panicTimer: 0,
     });
   }
-  // the squad grows by one member per level completed
-  for (let i = 0; i < Math.min(char.campaignLevel, SQUAD_JOIN.length); i++) {
-    g.allies.push(makeAlly(SQUAD_JOIN[i], world));
+  // the squad deploys YOUR way: FULL squad, partner only, or lone wolf
+  const squadMode = char.squadMode || 'full';
+  if (squadMode === 'full') {
+    // the squad grows by one member per level completed
+    for (let i = 0; i < Math.min(char.campaignLevel, SQUAD_JOIN.length); i++) {
+      g.allies.push(makeAlly(SQUAD_JOIN[i], world));
+    }
   }
   // the partner survivor picked at campaign start fights alongside you
-  if (char.partnerId) {
+  if (char.partnerId && squadMode !== 'solo') {
     const ph = heroById(char.partnerId);
     const partner = makeAlly('soldier', world);
     partner.type = 'partner';
@@ -1519,8 +1524,8 @@ function goreKill(x, y, radius, dirAngle, big, robot = false) {
   // --- FLESH: OVER-THE-TOP. Blood GUSHES, limbs fly, a pool stamps down ---
   sfx.playSquelch();
   // flying severed limbs on every kill (more on big ones)
-  const limbs = ['severed_arm', 'severed_leg'].filter((k) => SPRITES[k]);
-  const nLimb = big ? 5 : 2;
+  const limbs = ['severed_arm', 'severed_leg', 'gib1', 'gib2', 'gib3', 'gib4'].filter((k) => SPRITES[k]);
+  const nLimb = big ? 7 : 3;
   if (game.gibs.length < 300) {
     for (let i = 0; i < nLimb; i++) {
       const la = Math.random() * Math.PI * 2;
@@ -1541,7 +1546,8 @@ function goreKill(x, y, radius, dirAngle, big, robot = false) {
   spawnBlood(x, y, big ? 60 : 28, '#7b1d1d', dirAngle);
   spawnGibs(x, y, big ? 22 : 10, dirAngle);
   // a bloodburst flash + a wet pool decal
-  if (SPRITES.bloodburst) game.slashFx.push({ x, y, t: 0.35, sprite: 'bloodburst', r: radius * (big ? 4 : 2.6), rot: Math.random() * 6.28 });
+  const burstSp = big && SPRITES.bloodburst2 ? 'bloodburst2' : 'bloodburst';
+  if (SPRITES[burstSp]) game.slashFx.push({ x, y, t: big ? 0.45 : 0.35, sprite: burstSp, r: radius * (big ? 5 : 2.8), rot: Math.random() * 6.28 });
   stampBloodPool(x, y, radius * (big ? 2.2 : 1.4));
   stampDecal(x, y, radius, true);
   addShake(big ? 5 : 2);
@@ -1747,7 +1753,18 @@ function update(dt) {
       // top slot = -90°; slots fan clockwise
       let ang = Math.atan2(dy, dx) + Math.PI / 2;
       if (ang < 0) ang += Math.PI * 2;
-      g.wheelPick = Math.round(ang / (Math.PI * 2 / WEAPON_ORDER.length)) % WEAPON_ORDER.length;
+      let pick = Math.round(ang / (Math.PI * 2 / WEAPON_ORDER.length)) % WEAPON_ORDER.length;
+      if (!char.ownedWeapons.includes(WEAPON_ORDER[pick])) {
+        // aim assist: near-miss on a locked slot snaps to the closest owned gun
+        let bestI = pick, bestD = 99;
+        WEAPON_ORDER.forEach((w2, i2) => {
+          if (!char.ownedWeapons.includes(w2)) return;
+          const d2 = Math.min(Math.abs(i2 - pick), WEAPON_ORDER.length - Math.abs(i2 - pick));
+          if (d2 < bestD) { bestD = d2; bestI = i2; }
+        });
+        if (bestD <= 2) pick = bestI;
+      }
+      g.wheelPick = pick;
     }
   } else if (wasPressed('wheel-release') && g.wheelPick != null) {
     const w = WEAPON_ORDER[g.wheelPick];
@@ -2622,7 +2639,8 @@ function update(dt) {
           // the partner runs whatever YOU are running
           const mirror = a.type === 'partner' ? weaponStats(char, p.weapon) : null;
           a.fireCooldown = mirror ? Math.max(0.12, mirror.fireInterval * 1.5) : a.fireInterval;
-          sfx.playGunshot(mirror ? p.weapon : a.type === 'commander' ? 'magnum' : 'rifle');
+          // squad gunfire sits back in the mix — your own gun is the loud one
+          sfx.playGunshot(mirror ? p.weapon : a.type === 'commander' ? 'magnum' : 'rifle', 0.3);
           const sp = a.angle + (Math.random() - 0.5) * 0.08;
           g.bullets.push({
             x: a.x + Math.cos(a.angle) * 20, y: a.y + Math.sin(a.angle) * 20,
@@ -3395,6 +3413,11 @@ function killZombie(z, dirAngle) {
       x: g.player.x - 900, y: g.player.y - 110 + (Math.random() - 0.5) * 160,
       vx: 950, dropT: 0.3, drops: 9, life: 2.4,
     });
+  }
+  // every 5-chain: an arcade burst star stamps the kill, growing with the chain
+  if (g.combo >= 5 && g.combo % 5 === 0 && SPRITES.comboburst) {
+    g.slashFx.push({ x: z.x, y: z.y, t: 0.4, sprite: 'comboburst',
+      r: 40 + Math.min(90, g.combo * 1.6), rot: Math.random() * 6.28 });
   }
   // the combo number itself pops at the kill site
   if (g.combo >= 2) {
@@ -4275,7 +4298,7 @@ function drawPlayer() {
   let sprite = af ? af.idle : SPRITES[spriteName];
   if (spd2 > 40 && af) {
     // one pose per ~22px travelled — correct cadence at every speed
-    const ph = Math.floor((p.animDist || 0) / 22) % 4;
+    const ph = Math.floor((p.animDist || 0) / 26) % 4;
     sprite = (spd2 > 300 ? af.cycleRun : af.cycleWalk)[ph];
   }
   sprite = sprite || SPRITES[char.gender === 'f' ? 'player_f' : 'player'];
@@ -5627,15 +5650,24 @@ function drawLevelSelect() {
     button(bx, by2cur, w, bh2, cb);
   };
   let by2cur = by;
-  rowBtn(cx - bw - bgap / 2, bw, 'rgba(18,30,33,0.95)', '#80cbc4', '#80cbc4',
-    `★ SELECT SURVIVOR — ${heroById(char.heroId).name}`, () => {
+  const bw3 = 300;
+  rowBtn(cx - bw3 * 1.5 - bgap, bw3, 'rgba(18,30,33,0.95)', '#80cbc4', '#80cbc4',
+    `★ SURVIVOR — ${heroById(char.heroId).name}`, () => {
       reSelecting = true;
       selectMode = 'hero';
       gpFocus = 0;
       state = 'charselect';
     });
-  rowBtn(cx + bgap / 2, bw, 'rgba(24,24,36,0.95)', '#b39ddb', '#b39ddb',
-    '⚄ RANDOM LEVEL — unlocked ops only', () => {
+  const SQUAD_MODES = { full: '☰ SQUAD: FULL TEAM', partner: '☰ SQUAD: PARTNER ONLY', solo: '☰ SQUAD: LONE WOLF' };
+  rowBtn(cx - bw3 / 2, bw3, 'rgba(30,24,14,0.95)', '#ffcc80', '#ffcc80',
+    SQUAD_MODES[char.squadMode || 'full'], () => {
+      // cycle who rides with you — nobody deploys that you didn't choose
+      const order = ['full', 'partner', 'solo'];
+      char.squadMode = order[(order.indexOf(char.squadMode || 'full') + 1) % order.length];
+      saveCharacter(char);
+    });
+  rowBtn(cx + bw3 / 2 + bgap, bw3, 'rgba(24,24,36,0.95)', '#b39ddb', '#b39ddb',
+    '⚄ RANDOM — unlocked ops', () => {
       gameMode = 'campaign';
       // random redeploy respects the campaign locks — cleared ground only
       const open = Math.min(LEVELS.length - 1, char.maxCampaign || 0);
