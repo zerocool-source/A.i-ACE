@@ -19,7 +19,7 @@ const ctx = canvas.getContext('2d');
 // logical viewport — the canvas backing store renders at devicePixelRatio
 // for crisp HiDPI/4K output; all game code works in logical pixels
 const view = { w: window.innerWidth, h: window.innerHeight };
-let dpr = Math.min(2, window.devicePixelRatio || 1);
+let dpr = Math.min(3, window.devicePixelRatio || 1); // allow true 4K/retina backing
 // upscaling: the backing store renders at renderScale of the output, then
 // the compositor stretches it to the display — DLSS/FSR architecture, sans
 // the buffers a canvas-2D pipeline doesn't have (motion vectors / depth)
@@ -29,7 +29,7 @@ const GPU = detectGPU();
 function resize() {
   view.w = window.innerWidth;
   view.h = window.innerHeight;
-  dpr = Math.min(2, window.devicePixelRatio || 1);
+  dpr = Math.min(3, window.devicePixelRatio || 1);
   renderScale = upscaleMode().scale;
   canvas.width = Math.max(2, Math.round(view.w * dpr * renderScale));
   canvas.height = Math.max(2, Math.round(view.h * dpr * renderScale));
@@ -37,6 +37,9 @@ function resize() {
   canvas.style.height = view.h + 'px';
   // RCAS-ish convolution sharpen recovers edge contrast lost to the stretch
   canvas.classList.toggle('upscale-sharpen', renderScale < 1 && settings.sharpen);
+  // resizing resets 2D-context state: restore max-quality sprite filtering
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 }
 window.addEventListener('resize', resize);
 resize();
@@ -587,13 +590,22 @@ function placeProps(lv, world) {
       scatter(14, 64, 90, 32, 44, 'car');
       scatter(12, 40, 60, 40, 60, 'crate', true);
       break;
-    case 'rooftops':
-      edgeBlocks(10, 'building', 300, 200);
-      midBlocks(8, 'building', 260, 180);
-      scatter(10, 36, 52, 36, 52, 'cabinet');
+    case 'rooftops': {
+      // REDESIGN: one huge connected roof deck — you fight on TOP of the city.
+      // A parapet ring walls the playfield; past it is a nine-storey drop.
+      const inset = 96, pt = 18;
+      props.push({ x: inset, y: inset, w: world.w - inset * 2, h: pt, kind: 'parapet', low: true, seed: 0.3 });
+      props.push({ x: inset, y: world.h - inset - pt, w: world.w - inset * 2, h: pt, kind: 'parapet', low: true, seed: 0.5 });
+      props.push({ x: inset, y: inset + pt, w: pt, h: world.h - inset * 2 - pt * 2, kind: 'parapet', low: true, seed: 0.7 });
+      props.push({ x: world.w - inset - pt, y: inset + pt, w: pt, h: world.h - inset * 2 - pt * 2, kind: 'parapet', low: true, seed: 0.9 });
+      midBlocks(5, 'building', 240, 170); // stair houses + machine rooms
+      scatter(12, 60, 92, 50, 72, 'acunit'); // an HVAC forest to weave through
+      scatter(8, 36, 52, 36, 52, 'cabinet');
       scatter(1 / af, 210, 250, 210, 250, 'helipad', true); // last evac point
-      scatter(8, 60, 90, 50, 70, 'acunit');
+      scatter(6, 90, 130, 26, 36, 'barricade', true); // survivors' old lines
+      scatter(4, 40, 60, 40, 60, 'crate', true);
       break;
+    }
   }
   // street dressing — light touch on level 1, denser later
   const dress = lv.key === 'city' ? 0.5 : 1;
@@ -1725,8 +1737,8 @@ function update(dt) {
   if (gpPressed('lb')) cycleWeapon(-1);
   if (gpPressed('rb')) cycleWeapon(1);
 
-  // -- WEAPON WHEEL: hold right-mouse to fan out owned guns, aim to a slot,
-  // release to equip. Firing is suppressed while the wheel is open.
+  // -- WEAPON WHEEL: hold right-mouse to fan out the FULL arsenal — owned
+  // guns equip on release, locked ones show what the shop still holds.
   const owned = ownedList();
   g.wheelOpen = input.mouse.right && owned.length > 1;
   if (g.wheelOpen) {
@@ -1736,11 +1748,15 @@ function update(dt) {
       // top slot = -90°; slots fan clockwise
       let ang = Math.atan2(dy, dx) + Math.PI / 2;
       if (ang < 0) ang += Math.PI * 2;
-      g.wheelPick = Math.round(ang / (Math.PI * 2 / owned.length)) % owned.length;
+      g.wheelPick = Math.round(ang / (Math.PI * 2 / WEAPON_ORDER.length)) % WEAPON_ORDER.length;
     }
   } else if (wasPressed('wheel-release') && g.wheelPick != null) {
-    const w = owned[g.wheelPick];
-    if (w && p.weapon !== w) {
+    const w = WEAPON_ORDER[g.wheelPick];
+    if (w && !char.ownedWeapons.includes(w)) {
+      sfx.playDenied();
+      g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: `${WEAPONS[w].name} — BUY IN SHOP`, color: '#ef5350', life: 1.1, vy: -45 });
+      g.wheelPick = null;
+    } else if (w && p.weapon !== w) {
       p.weapon = w;
       p.reloading = 0;
       p.fireCooldown = Math.max(p.fireCooldown, 0.15);
@@ -3582,8 +3598,26 @@ function drawGround() {
         ctx.drawImage(ground, x, y, tile, tile);
     ctx.globalAlpha = 1;
   }
-  // roads through the city / base
   const lv = level();
+  if (lv.key === 'rooftops') {
+    // past the parapet: the void — nine storeys down to dying streetlights
+    const inset = 96;
+    ctx.fillStyle = 'rgba(3,4,6,0.96)';
+    ctx.fillRect(-400, -400, g.world.w + 800, inset + 400);
+    ctx.fillRect(-400, g.world.h - inset, g.world.w + 800, inset + 400);
+    ctx.fillRect(-400, 0, inset + 400, g.world.h);
+    ctx.fillRect(g.world.w - inset, 0, inset + 400, g.world.h);
+    for (let i = 0; i < 220; i++) {
+      const sx = (i * 733.7) % (g.world.w + 600) - 300;
+      const sy = (i * 397.3) % (g.world.h + 600) - 300;
+      const onEdge = sx < inset - 8 || sx > g.world.w - inset + 8 || sy < inset - 8 || sy > g.world.h - inset + 8;
+      if (!onEdge) continue;
+      const warm = i % 3 !== 0;
+      ctx.fillStyle = warm ? 'rgba(255,196,110,0.4)' : 'rgba(140,190,255,0.32)';
+      ctx.fillRect(sx, sy, i % 5 === 0 ? 4 : 2, 2);
+    }
+  }
+  // roads through the city / base
   if (lv.key === 'city' || lv.key === 'base' || gameMode === 'drive') {
     const roadW = 150;
     ctx.fillStyle = 'rgba(24,26,30,0.85)';
@@ -3779,6 +3813,21 @@ function drawProps() {
         ctx.fillStyle = 'rgba(255,193,7,0.25)';
         for (let i = 0; i < 4; i++) ctx.fillRect(pr.x + 6 + i * 16, pr.y + 6, 8, 8);
       }
+    } else if (pr.kind === 'parapet') {
+      // rooftop coping: pale concrete cap with expansion-joint ticks
+      ctx.fillStyle = '#565d64';
+      ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
+      ctx.fillStyle = '#6d747b';
+      ctx.fillRect(pr.x + 1.5, pr.y + 1.5, pr.w - 3, pr.h - 3);
+      ctx.strokeStyle = '#454b51';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (pr.w > pr.h) {
+        for (let jx = pr.x + 28; jx < pr.x + pr.w; jx += 28) { ctx.moveTo(jx, pr.y + 1); ctx.lineTo(jx, pr.y + pr.h - 1); }
+      } else {
+        for (let jy = pr.y + 28; jy < pr.y + pr.h; jy += 28) { ctx.moveTo(pr.x + 1, jy); ctx.lineTo(pr.x + pr.w - 1, jy); }
+      }
+      ctx.stroke();
     } else if (pr.kind === 'car') {
       const burning = pr.seed < 0.35;
       // a chunk of parked cars use the generated car sprites
@@ -3995,7 +4044,9 @@ function drawZombie(z) {
   if (z.windup && SPRITES[`${z.type}_atk`]) {
     sprite = SPRITES[`${z.type}_atk`]; // dedicated strike pose
   } else if (zaf && moving) {
-    const ph = Math.floor((z.animDist || 0) / 20) % 4;
+    // stride length per type: dogs churn frames fast, machines step deliberate
+    const strideLen = z.type === 'dog' ? 13 : z.type && z.type.startsWith('bot_') ? 26 : 20;
+    const ph = Math.floor((z.animDist || 0) / strideLen) % 4;
     sprite = zaf.cycleWalk[ph];
   } else if (zaf) {
     sprite = zaf.idle;
@@ -4003,14 +4054,32 @@ function drawZombie(z) {
   if (sprite) {
     ctx.save();
     const rear = z.windup ? -0.3 * Math.sin((0.33 - z.windup) / 0.33 * Math.PI) : 0;
-    // lurching walk: a side-to-side waddle + a plodding step-bob, both driven
-    // by how far it's actually travelled so it truly reads as WALKING
-    const step = (z.animDist || 0) * 0.09;
-    const waddle = moving ? Math.sin(step) * 0.12 : Math.sin(z.wobble * 2) * 0.04;
-    const bob = moving ? 1 + Math.abs(Math.sin(step)) * 0.09 : 1;
+    // gait personality per body type — meat lurches, machines march,
+    // crawlers drag flat, dogs gallop with a longer spine-flex stride
+    const isBot = z.type && z.type.startsWith('bot_');
+    const isCrawl = z.type === 'crawler';
+    const isDog = z.type === 'dog';
+    const step = (z.animDist || 0) * (isDog ? 0.13 : 0.09);
+    let waddle, bob;
+    if (isBot) {
+      // servos don't sway — a tight metronome tick, no organic bob
+      waddle = moving ? Math.sin(step) * 0.04 : 0;
+      bob = 1;
+    } else if (isCrawl) {
+      // dragging a torso: no vertical bob at all, just a grinding sway
+      waddle = moving ? Math.sin(step * 0.7) * 0.09 : Math.sin(z.wobble * 1.4) * 0.03;
+      bob = 1;
+    } else if (isDog) {
+      // four legs: quick gallop pulse, spine flexes along the stride
+      waddle = moving ? Math.sin(step) * 0.07 : Math.sin(z.wobble * 2) * 0.03;
+      bob = moving ? 1 + Math.abs(Math.sin(step)) * 0.13 : 1;
+    } else {
+      waddle = moving ? Math.sin(step) * 0.12 : Math.sin(z.wobble * 2) * 0.04;
+      bob = moving ? 1 + Math.abs(Math.sin(step)) * 0.09 : 1;
+    }
     // overhead art rotates to face its target like a proper top-down shooter
     ctx.rotate(a + waddle + rear);
-    const zsq = Math.sin(step * 2) * (moving ? 0.06 : 0.03);
+    const zsq = isBot || isCrawl ? 0 : Math.sin(step * 2) * (moving ? 0.06 : 0.03);
     const wScale = (z.windup ? 1.12 : 1) * bob;
     ctx.scale((1 + zsq) * wScale, (1 - zsq) * wScale);
     drawSprite(sprite, z.radius * 3.2);
@@ -4827,49 +4896,56 @@ function drawPauseMenu() {
 }
 
 function drawWeaponWheel() {
-  const owned = ownedList();
   const cx = view.w / 2, cy = view.h / 2;
-  const R = Math.min(220, view.h * 0.32);
+  const R = Math.min(250, view.h * 0.36);
   ctx.save();
   // dim the field so the wheel pops
   ctx.fillStyle = 'rgba(4,6,9,0.55)';
   ctx.fillRect(0, 0, view.w, view.h);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  owned.forEach((w, i) => {
-    const ang = -Math.PI / 2 + i * (Math.PI * 2 / owned.length);
+  WEAPON_ORDER.forEach((w, i) => {
+    const ang = -Math.PI / 2 + i * (Math.PI * 2 / WEAPON_ORDER.length);
     const x = cx + Math.cos(ang) * R;
     const y = cy + Math.sin(ang) * R;
+    const have = char.ownedWeapons.includes(w);
     const sel = i === game.wheelPick;
     const cur = w === game.player.weapon;
     ctx.beginPath();
-    ctx.arc(x, y, sel ? 46 : 38, 0, Math.PI * 2);
-    ctx.fillStyle = sel ? 'rgba(255,171,64,0.28)' : 'rgba(10,14,18,0.85)';
+    ctx.arc(x, y, sel ? 44 : 36, 0, Math.PI * 2);
+    ctx.fillStyle = sel ? (have ? 'rgba(255,171,64,0.28)' : 'rgba(120,40,40,0.35)') : 'rgba(10,14,18,0.85)';
     ctx.fill();
     ctx.lineWidth = sel ? 3 : 1.5;
-    ctx.strokeStyle = sel ? '#ffab40' : cur ? '#80cbc4' : '#546e7a';
+    ctx.strokeStyle = sel ? (have ? '#ffab40' : '#ef5350') : cur ? '#80cbc4' : have ? '#546e7a' : '#2b333b';
     ctx.stroke();
     const icon = SPRITES[WEAPON_ICON[w]];
     if (icon) {
       ctx.save();
       ctx.translate(x, y - 6);
-      drawSpriteFit(icon, 52, 34);
+      ctx.globalAlpha = have ? 1 : 0.3;
+      drawSpriteFit(icon, 50, 32);
       ctx.restore();
     }
     ctx.font = 'bold 11px monospace';
-    ctx.fillStyle = sel ? '#fff' : '#b0bec5';
-    ctx.fillText(WEAPONS[w].name, x, y + 24);
-    // live ammo readout so the pick is informed: mag / reserve
-    const mag = game.player.mags[w] ?? 0;
-    const res = game.player.reserve[w];
-    ctx.font = 'bold 10px monospace';
-    ctx.fillStyle = mag === 0 && res === 0 ? '#ef5350' : '#ffd54f';
-    ctx.fillText(`${mag}/${res === Infinity ? '∞' : res}`, x, y + 37);
-    const tier = char.weaponTiers && char.weaponTiers[w];
-    if (tier) {
-      ctx.fillStyle = '#ffab40';
-      ctx.font = '9px monospace';
-      ctx.fillText('★'.repeat(Math.min(3, tier)), x, y - 30);
+    ctx.fillStyle = have ? (sel ? '#fff' : '#b0bec5') : '#4a565f';
+    ctx.fillText(WEAPONS[w].name, x, y + 23);
+    if (have) {
+      // live ammo readout so the pick is informed: mag / reserve
+      const mag = game.player.mags[w] ?? 0;
+      const res = game.player.reserve[w];
+      ctx.font = 'bold 10px monospace';
+      ctx.fillStyle = mag === 0 && res === 0 ? '#ef5350' : '#ffd54f';
+      ctx.fillText(`${mag}/${res === Infinity ? '∞' : res}`, x, y + 36);
+      const tier = char.weaponTiers && char.weaponTiers[w];
+      if (tier) {
+        ctx.fillStyle = '#ffab40';
+        ctx.font = '9px monospace';
+        ctx.fillText('★'.repeat(Math.min(3, tier)), x, y - 29);
+      }
+    } else {
+      ctx.font = '10px monospace';
+      ctx.fillStyle = '#78909c';
+      ctx.fillText('🔒 SHOP', x, y + 36);
     }
   });
   // hub
@@ -4885,7 +4961,7 @@ function drawWeaponWheel() {
   ctx.fillText('SWAP', cx, cy);
   // pointer to the aimed slot
   if (game.wheelPick != null) {
-    const a2 = -Math.PI / 2 + game.wheelPick * (Math.PI * 2 / owned.length);
+    const a2 = -Math.PI / 2 + game.wheelPick * (Math.PI * 2 / WEAPON_ORDER.length);
     ctx.strokeStyle = '#ffab40';
     ctx.lineWidth = 3;
     ctx.beginPath();

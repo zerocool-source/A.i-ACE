@@ -86,11 +86,15 @@ export const STORY_BEATS = {
   ],
   rooftops: [
     { when: { at: 8 }, speaker: 'echo', text: 'This is it. The final nest took the high ground — where the last survivors were.' },
+    { when: { at: 22 }, speaker: 'partner', text: 'Mind the parapet. Past that ledge it\'s nine storeys of nothing.', fx: 'shake' },
     { when: { at: 35 }, speaker: 'voice', text: 'YOU CLIMBED ALL THIS WAY TO DIE CLOSER TO THE SKY. POETIC.', fx: 'flare' },
+    { when: { at: 60 }, speaker: 'echo', text: 'The uplink tower is drawing every horde in the county to your roof. That\'s not a bug — that\'s our chance to end ALL of them.' },
     { when: { kills: 120 }, speaker: 'partner', text: 'Whatever happens up here — it\'s been an honor, you glorious lunatic.' },
+    { when: { kills: 250 }, speaker: 'hero', text: 'Every name in those files. Every sealed door. Every grave. This roof is where it gets paid for.' },
     { when: { wave: 2 }, speaker: 'echo', text: 'After this I\'m coming down from my tower. Save me a rooftop.', fx: 'shake' },
     { when: { wave: 3 }, speaker: 'hero', text: 'Dawn\'s coming up blood-red. Last nest. Last stand. LAST WAVE.' },
     { when: { kills: 400 }, speaker: 'voice', text: 'IMPOSSIBLE. WHAT... WHAT ARE YOU?', fx: 'shake' },
+    { when: { kills: 500 }, speaker: 'echo', text: 'EVAC-1 is spooling up. Finish this, get to the pad, and let\'s go home — wherever that is now.' },
   ],
 };
 
