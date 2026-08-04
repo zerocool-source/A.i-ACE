@@ -871,7 +871,6 @@ function newGame() {
       r: 180 + Math.random() * 220, vx: 6 + Math.random() * 10, a: 0.05 + Math.random() * 0.05,
     })),
     bombers: [],
-    airdrops: [],
     heliCalls: 2,
     overclock: 0,
     robotWave: false,
@@ -2769,12 +2768,17 @@ function update(dt) {
       g.supplyT = 45 + Math.random() * 30;
       const a2 = Math.random() * Math.PI * 2;
       const r2 = 260 + Math.random() * 320;
-      g.drops.push({
-        x: Math.max(60, Math.min(g.world.w - 60, p.x + Math.cos(a2) * r2)),
-        y: Math.max(60, Math.min(g.world.h - 60, p.y + Math.sin(a2) * r2)),
-        landT: 2.6, life: 30,
+      const dropX = Math.max(60, Math.min(g.world.w - 60, p.x + Math.cos(a2) * r2));
+      const dropY = Math.max(60, Math.min(g.world.h - 60, p.y + Math.sin(a2) * r2));
+      g.drops.push({ x: dropX, y: dropY, landT: 2.6, life: 30 });
+      // the cargo jet that kicks it out — screams over the drop point
+      const dir4 = Math.random() < 0.5 ? 1 : -1;
+      g.bombers.push({
+        x: dropX - dir4 * 900, y: dropY - 24, vx: dir4 * 780,
+        life: 2.6, dropT: 999, drops: 0, sp: 'fighterjet',
       });
       banner('SUPPLY DROP INBOUND', 'grab the crate — big bonus inside', '#ffd54f');
+      radio('echo', 'ECHO-6: "Care package on your position. Don\'t let them unwrap it first."', '#ffd54f');
       sfx.playFanfare();
     }
   }
@@ -2847,22 +2851,6 @@ function update(dt) {
       }
     }
   }
-  // -- SUPPLY DROPS: a cargo jet screams over and kicks out a chuted crate
-  if (gameMode === 'campaign' || gameMode === 'horde' || g.survival) {
-    g.supplyT = (g.supplyT ?? 24) - dt;
-    if (g.supplyT <= 0) {
-      g.supplyT = 42 + Math.random() * 18;
-      const sdir = Math.random() < 0.5 ? 1 : -1;
-      const sx = p.x + (Math.random() - 0.5) * 320;
-      const sy = p.y + (Math.random() - 0.5) * 260;
-      g.bombers.push({
-        x: sx - sdir * 900, y: sy, vx: sdir * 780, life: 2.6,
-        dropT: 900 / 780, drops: 0, supply: { x: sx, y: sy }, sp: 'fighterjet',
-      });
-      banner('SUPPLY DROP INBOUND', 'watch for the chute', '#ffd54f');
-      radio('echo', 'ECHO-6: "Care package on your position. Don\'t let them unwrap it first."', '#ffd54f');
-    }
-  }
   // -- CALL THE BIRD [V]: limited on-call gunship orbits you and guns the horde
   if (wasPressed('v') && !g.supportHeli && !g.extract) {
     if ((g.heliCalls ?? 0) > 0) {
@@ -2925,41 +2913,9 @@ function update(dt) {
       bm.dropT = 0.16;
       g.strikes.push({ x: bm.x + 60, y: bm.y + 40 + (Math.random() - 0.5) * 120, t: 0.35 });
     }
-    if (bm.supply && bm.dropT <= 0) {
-      // the crate kicks out over the marked spot
-      g.airdrops = g.airdrops || [];
-      g.airdrops.push({ x: bm.supply.x, y: bm.supply.y, fall: 1.7, taken: false });
-      bm.supply = null;
-    }
   }
   g.bombers = (g.bombers || []).filter((bm) => bm.life > 0);
 
-  // -- airdrop crates: drift down under canopy, then sit as loot
-  for (const ad of g.airdrops || []) {
-    if (ad.fall > 0) {
-      ad.fall -= dt;
-      if (ad.fall <= 0) {
-        addShake(2);
-        g.dmgNumbers.push({ x: ad.x, y: ad.y - 20, txt: 'SUPPLIES DOWN', color: '#ffd54f', life: 1.2, vy: -40 });
-      }
-    } else if (!ad.taken && Math.hypot(p.x - ad.x, p.y - ad.y) < 52) {
-      ad.taken = true;
-      // the care package: ammo, bang, patch-up, scrap — and rations in survival
-      for (const w of WEAPON_ORDER) {
-        if (p.reserve[w] !== Infinity) {
-          p.reserve[w] = Math.min(AMMO_RESERVE[w] * 2, p.reserve[w] + Math.ceil(AMMO_RESERVE[w] * 0.5));
-        }
-      }
-      char.grenades = (char.grenades || 0) + 2;
-      char.scrap += 120;
-      p.hp = Math.min(derived(char).maxHp, p.hp + 35);
-      if (g.survival) { g.supplies.food += 2; g.supplies.water += 2; g.supplies.bandage += 1; }
-      saveCharacter(char);
-      sfx.playPurchase();
-      banner('SUPPLIES SECURED', '+ammo +2 nades +120 scrap +35 hp', '#ffd54f');
-    }
-  }
-  g.airdrops = (g.airdrops || []).filter((ad) => !ad.taken);
 
   // -- BUILD MODE [N]: fortify. Place wooden barricades for scrap; the
   // infected have to chew through them, which buys you the seconds that
@@ -3972,7 +3928,7 @@ function updateExtract(dt) {
     }
   } else if (ex.phase === 'landed') {
     ex.alt = 0;
-    if (Math.hypot(p.x - ex.x, p.y - ex.y) < 115) {
+    if (Math.hypot(p.x - ex.x, p.y - ex.y) < 140) {
       ex.phase = 'depart'; ex.t = 0;
       banner('WHEELS UP', 'extraction complete', '#ffd54f');
       addShake(5);
@@ -6914,44 +6870,6 @@ function render(dt) {
     }
     ctx.restore();
   }
-  // airdrop crates — canopy on the way down, beacon-lit loot on the ground
-  for (const ad of game.airdrops || []) {
-    ctx.save();
-    ctx.translate(ad.x, ad.y);
-    if (ad.fall > 0) {
-      const k4 = ad.fall / 1.7; // 1 = just dropped, 0 = touchdown
-      ctx.globalAlpha = 0.3;
-      ctx.fillStyle = '#000';
-      ctx.beginPath();
-      ctx.ellipse(0, 10, 26 * (1 - k4 * 0.5), 12 * (1 - k4 * 0.5), 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      const sc4 = 1 + k4 * 0.9;
-      // canopy
-      ctx.strokeStyle = 'rgba(255,213,79,0.9)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, -30 * sc4, 30 * sc4, Math.PI, 0);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(-30 * sc4, -30 * sc4); ctx.lineTo(-9 * sc4, -6 * sc4);
-      ctx.moveTo(30 * sc4, -30 * sc4); ctx.lineTo(9 * sc4, -6 * sc4);
-      ctx.stroke();
-      if (SPRITES.lootcrate) drawSpriteFit(SPRITES.lootcrate, 34 * sc4, 34 * sc4);
-      else { ctx.fillStyle = '#8d6e63'; ctx.fillRect(-14 * sc4, -14 * sc4, 28 * sc4, 28 * sc4); }
-    } else {
-      // grounded: crate + pulsing pickup beacon
-      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 260);
-      ctx.strokeStyle = `rgba(255,213,79,${0.25 + pulse * 0.45})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(0, 0, 34 + pulse * 8, 0, Math.PI * 2);
-      ctx.stroke();
-      if (SPRITES.lootcrate) drawSpriteFit(SPRITES.lootcrate, 40, 40);
-      else { ctx.fillStyle = '#8d6e63'; ctx.fillRect(-16, -16, 32, 32); }
-    }
-    ctx.restore();
-  }
   // RAPTOR-2 — the on-call gunship wheeling around the player
   if (game.supportHeli) {
     const sh = game.supportHeli;
@@ -7372,9 +7290,13 @@ window.__dz = {
   paused: () => paused,
   extract: () => (game && game.extract ? game.extract.phase : null),
   heli: () => !!(game && game.supportHeli),
-  airdrops: () => (game && game.airdrops ? game.airdrops.length : -1),
+  airdrops: () => (game && game.drops ? game.drops.length : -1),
   dropSupplies: () => { if (game) { game.supplyT = 0.05; return true; } return false; },
-  airState: () => (game ? { supplyT: game.supplyT, bombers: game.bombers.length, mode: gameMode, drops: (game.airdrops || []).length } : null),
+  airState: () => (game ? { supplyT: game.supplyT, bombers: game.bombers.length, mode: gameMode, drops: (game.drops || []).length } : null),
+  pos: () => (game ? { px: game.player.x, py: game.player.y,
+    ex: game.extract ? game.extract.x : null, ey: game.extract ? game.extract.y : null } : null),
+  scrapNow: () => char.scrap,
+  bombersFull: () => (game ? JSON.parse(JSON.stringify(game.bombers)) : null),
   forceLastWave: () => {
     if (!game) return false;
     game.wave = level().waves;
