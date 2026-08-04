@@ -128,6 +128,8 @@ for (const name of ['player', 'player_f', 'soldier', 'commander', 'medic', 'demo
                     'paratrooper', 'hackchip',
                     'nade_frag', 'nade_smoke', 'nade_decoy', 'nade_dyna',
                     'wic_rifle', 'wic_shotgun', 'wic_railgun',
+                    'wic_pistol', 'wic_smg', 'wic_magnum', 'wic_minigun', 'wic_flamer',
+                    'wic_flak', 'wic_sniper', 'wic_mortar', 'wic_glauncher', 'wic_mlauncher',
                     'lootcrate', 'barrier_scifi', 'pylon',
                     'explosion_hd', 'fighterjet', 'helicopter', 'slash_fx', 'bloodburst',
                     'bloodburst2', 'comboburst', 'gib1', 'gib2', 'gib3', 'gib4',
@@ -2869,6 +2871,18 @@ function update(dt) {
       }
     }
   }
+  // -- AUTO AIR COVER: when the horde gets thick, RAPTOR-2 deploys itself
+  g.autoHeliT = Math.max(0, (g.autoHeliT ?? 20) - dt);
+  if (!g.supportHeli && !g.extract && g.autoHeliT <= 0) {
+    const thick = g.zombies.reduce((n2, z2) => n2 + (Math.hypot(z2.x - p.x, z2.y - p.y) < 480 ? 1 : 0), 0);
+    if (thick >= 22) {
+      g.autoHeliT = 75; // free support, but the airbase needs time to rearm
+      g.supportHeli = { t: 0, x: p.x - 800, y: p.y - 500, ang: 0, gunT: 0, tracerT: 0, dur: 11 };
+      banner('AIR COVER', 'RAPTOR-2 saw the swarm — guns free', '#80cbc4');
+      radio('echo', 'ECHO-6: "That horde\'s too thick. RAPTOR-2 is rolling in hot — keep moving."', '#80cbc4');
+      sfx.playHiggsWhomp();
+    }
+  }
   // -- CALL THE BIRD [V]: limited on-call gunship orbits you and guns the horde
   if (wasPressed('v') && !g.supportHeli && !g.extract) {
     if ((g.heliCalls ?? 0) > 0) {
@@ -4813,7 +4827,12 @@ function drawEnemyArrows() {
 
 // radial gun selector: a fan of owned-weapon slots around screen centre,
 // the aimed slot lit up; release right-mouse to equip it
-const WEAPON_ICON = { rifle: 'wic_rifle', shotgun: 'wic_shotgun', railgun: 'wic_railgun' };
+const WEAPON_ICON = {
+  pistol: 'wic_pistol', rifle: 'wic_rifle', shotgun: 'wic_shotgun', smg: 'wic_smg',
+  magnum: 'wic_magnum', minigun: 'wic_minigun', flamer: 'wic_flamer', flak: 'wic_flak',
+  railgun: 'wic_railgun', sniper: 'wic_sniper', mortar: 'wic_mortar',
+  glauncher: 'wic_glauncher', mlauncher: 'wic_mlauncher',
+};
 
 // full-screen pause menu: resume / restart / arcade toggle / quit
 function drawPauseMenu() {
