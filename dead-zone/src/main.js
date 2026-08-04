@@ -859,6 +859,8 @@ function newGame() {
       r: 180 + Math.random() * 220, vx: 6 + Math.random() * 10, a: 0.05 + Math.random() * 0.05,
     })),
     bombers: [],
+    airdrops: [],
+    heliCalls: 2,
     overclock: 0,
     robotWave: false,
     flybyT: 25 + Math.random() * 35,
@@ -1577,6 +1579,8 @@ function update(dt) {
   const g = game;
   const p = g.player;
   const d = derived(char);
+  // bullet-time while the weapon wheel is fanned out — pick your gun in peace
+  if (g.wheelOpen) dt *= 0.22;
   g.time += dt;
 
   const driving = gameMode === 'drive';
@@ -2827,6 +2831,74 @@ function update(dt) {
       }
     }
   }
+  // -- SUPPLY DROPS: a cargo jet screams over and kicks out a chuted crate
+  if (gameMode === 'campaign' || gameMode === 'horde' || g.survival) {
+    g.supplyT = (g.supplyT ?? 24) - dt;
+    if (g.supplyT <= 0) {
+      g.supplyT = 42 + Math.random() * 18;
+      const sdir = Math.random() < 0.5 ? 1 : -1;
+      const sx = p.x + (Math.random() - 0.5) * 320;
+      const sy = p.y + (Math.random() - 0.5) * 260;
+      g.bombers.push({
+        x: sx - sdir * 900, y: sy, vx: sdir * 780, life: 2.6,
+        dropT: 900 / 780, drops: 0, supply: { x: sx, y: sy }, sp: 'fighterjet',
+      });
+      banner('SUPPLY DROP INBOUND', 'watch for the chute', '#ffd54f');
+      radio('echo', 'ECHO-6: "Care package on your position. Don\'t let them unwrap it first."', '#ffd54f');
+    }
+  }
+  // -- CALL THE BIRD [V]: limited on-call gunship orbits you and guns the horde
+  if (wasPressed('v') && !g.supportHeli && !g.extract) {
+    if ((g.heliCalls ?? 0) > 0) {
+      g.heliCalls--;
+      g.supportHeli = { t: 0, x: p.x - 800, y: p.y - 500, ang: 0, gunT: 0, tracerT: 0, dur: 15 };
+      banner('GUNSHIP ON CALL', `RAPTOR-2 inbound · ${g.heliCalls} call${g.heliCalls === 1 ? '' : 's'} left`, '#80cbc4');
+      radio('echo', 'ECHO-6: "RAPTOR-2 is yours for fifteen seconds. Spend them well."', '#80cbc4');
+      sfx.playHiggsWhomp();
+    } else {
+      sfx.playDenied();
+      g.dmgNumbers.push({ x: p.x, y: p.y - 26, txt: 'NO AIR SUPPORT LEFT', color: '#ef5350', life: 1, vy: -45 });
+    }
+  }
+  if (g.supportHeli) {
+    const sh = g.supportHeli;
+    sh.t += dt;
+    if (sh.t < sh.dur) {
+      // orbit the player like a wheeling bird of prey
+      const oa = sh.t * 1.3;
+      const tx2 = p.x + Math.cos(oa) * 230, ty2 = p.y + Math.sin(oa) * 230;
+      const ddx = tx2 - sh.x, ddy = ty2 - sh.y, dd = Math.hypot(ddx, ddy) || 1;
+      const sp3 = Math.min(dd * 4, 620);
+      sh.x += (ddx / dd) * sp3 * dt;
+      sh.y += (ddy / dd) * sp3 * dt;
+      sh.ang = Math.atan2(ddy, ddx);
+    } else {
+      // time's up — bank away and leave
+      sh.x += Math.cos(sh.ang) * 700 * dt;
+      sh.y += Math.sin(sh.ang) * 700 * dt;
+      if (sh.t > sh.dur + 2) g.supportHeli = null;
+    }
+    if (g.supportHeli) {
+      sh.gunT -= dt;
+      sh.tracerT -= dt;
+      if (sh.t < sh.dur && sh.gunT <= 0) {
+        let best = null, bd = 470;
+        for (const z of g.zombies) {
+          const d3 = Math.hypot(z.x - sh.x, z.y - sh.y);
+          if (d3 < bd) { bd = d3; best = z; }
+        }
+        if (best) {
+          sh.gunT = 0.09;
+          sh.tracer = { x: best.x, y: best.y };
+          sh.tracerT = 0.07;
+          best.hp -= 34;
+          best.flash = 0.1;
+          spawnBlood(best.x, best.y, 2);
+          if (best.hp <= 0) killZombie(best, Math.atan2(best.y - sh.y, best.x - sh.x));
+        }
+      }
+    }
+  }
   // -- combo air support: the jet streaks past, bombs walking beneath it
   for (const bm of g.bombers || []) {
     bm.x += bm.vx * dt;
@@ -2837,8 +2909,41 @@ function update(dt) {
       bm.dropT = 0.16;
       g.strikes.push({ x: bm.x + 60, y: bm.y + 40 + (Math.random() - 0.5) * 120, t: 0.35 });
     }
+    if (bm.supply && bm.dropT <= 0) {
+      // the crate kicks out over the marked spot
+      g.airdrops = g.airdrops || [];
+      g.airdrops.push({ x: bm.supply.x, y: bm.supply.y, fall: 1.7, taken: false });
+      bm.supply = null;
+    }
   }
   g.bombers = (g.bombers || []).filter((bm) => bm.life > 0);
+
+  // -- airdrop crates: drift down under canopy, then sit as loot
+  for (const ad of g.airdrops || []) {
+    if (ad.fall > 0) {
+      ad.fall -= dt;
+      if (ad.fall <= 0) {
+        addShake(2);
+        g.dmgNumbers.push({ x: ad.x, y: ad.y - 20, txt: 'SUPPLIES DOWN', color: '#ffd54f', life: 1.2, vy: -40 });
+      }
+    } else if (!ad.taken && Math.hypot(p.x - ad.x, p.y - ad.y) < 52) {
+      ad.taken = true;
+      // the care package: ammo, bang, patch-up, scrap — and rations in survival
+      for (const w of WEAPON_ORDER) {
+        if (p.reserve[w] !== Infinity) {
+          p.reserve[w] = Math.min(AMMO_RESERVE[w] * 2, p.reserve[w] + Math.ceil(AMMO_RESERVE[w] * 0.5));
+        }
+      }
+      char.grenades = (char.grenades || 0) + 2;
+      char.scrap += 120;
+      p.hp = Math.min(derived(char).maxHp, p.hp + 35);
+      if (g.survival) { g.supplies.food += 2; g.supplies.water += 2; g.supplies.bandage += 1; }
+      saveCharacter(char);
+      sfx.playPurchase();
+      banner('SUPPLIES SECURED', '+ammo +2 nades +120 scrap +35 hp', '#ffd54f');
+    }
+  }
+  g.airdrops = (g.airdrops || []).filter((ad) => !ad.taken);
 
   // -- BUILD MODE [N]: fortify. Place wooden barricades for scrap; the
   // infected have to chew through them, which buys you the seconds that
@@ -4754,9 +4859,18 @@ function drawWeaponWheel() {
     ctx.font = 'bold 11px monospace';
     ctx.fillStyle = sel ? '#fff' : '#b0bec5';
     ctx.fillText(WEAPONS[w].name, x, y + 24);
-    ctx.font = '9px monospace';
-    ctx.fillStyle = '#78909c';
-    ctx.fillText(`[${WEAPONS[w].key.toUpperCase()}]`, x, y + 36);
+    // live ammo readout so the pick is informed: mag / reserve
+    const mag = game.player.mags[w] ?? 0;
+    const res = game.player.reserve[w];
+    ctx.font = 'bold 10px monospace';
+    ctx.fillStyle = mag === 0 && res === 0 ? '#ef5350' : '#ffd54f';
+    ctx.fillText(`${mag}/${res === Infinity ? '∞' : res}`, x, y + 37);
+    const tier = char.weaponTiers && char.weaponTiers[w];
+    if (tier) {
+      ctx.fillStyle = '#ffab40';
+      ctx.font = '9px monospace';
+      ctx.fillText('★'.repeat(Math.min(3, tier)), x, y - 30);
+    }
   });
   // hub
   ctx.beginPath();
@@ -4945,7 +5059,7 @@ function drawHUD() {
   ctx.font = '12px monospace';
   ctx.fillStyle = '#9e9e9e';
   const keys = ownedList().map((w) => `[${WEAPONS[w].key}]${WEAPONS[w].name}`).join(' ');
-  ctx.fillText(`${keys}  [R]RELOAD [SPACE]DASH [B]GRAB [Z]BLADES [N]BUILD [TAB]CHAR`, view.w - 24, view.h - 40);
+  ctx.fillText(`${keys}  [R]RELOAD [SPACE]DASH [B]GRAB [Z]BLADES [N]BUILD [V]HELI×${game.heliCalls ?? 0} [TAB]CHAR`, view.w - 24, view.h - 40);
   // dash cooldown pip
   ctx.fillStyle = p.dashCooldown <= 0 ? '#80cbc4' : '#37474f';
   ctx.fillText(p.dashCooldown <= 0 ? 'DASH READY' : `DASH ${p.dashCooldown.toFixed(1)}s`, view.w - 24, view.h - 112);
@@ -6724,6 +6838,83 @@ function render(dt) {
     }
     ctx.restore();
   }
+  // airdrop crates — canopy on the way down, beacon-lit loot on the ground
+  for (const ad of game.airdrops || []) {
+    ctx.save();
+    ctx.translate(ad.x, ad.y);
+    if (ad.fall > 0) {
+      const k4 = ad.fall / 1.7; // 1 = just dropped, 0 = touchdown
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.ellipse(0, 10, 26 * (1 - k4 * 0.5), 12 * (1 - k4 * 0.5), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      const sc4 = 1 + k4 * 0.9;
+      // canopy
+      ctx.strokeStyle = 'rgba(255,213,79,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, -30 * sc4, 30 * sc4, Math.PI, 0);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-30 * sc4, -30 * sc4); ctx.lineTo(-9 * sc4, -6 * sc4);
+      ctx.moveTo(30 * sc4, -30 * sc4); ctx.lineTo(9 * sc4, -6 * sc4);
+      ctx.stroke();
+      if (SPRITES.lootcrate) drawSpriteFit(SPRITES.lootcrate, 34 * sc4, 34 * sc4);
+      else { ctx.fillStyle = '#8d6e63'; ctx.fillRect(-14 * sc4, -14 * sc4, 28 * sc4, 28 * sc4); }
+    } else {
+      // grounded: crate + pulsing pickup beacon
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 260);
+      ctx.strokeStyle = `rgba(255,213,79,${0.25 + pulse * 0.45})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, 34 + pulse * 8, 0, Math.PI * 2);
+      ctx.stroke();
+      if (SPRITES.lootcrate) drawSpriteFit(SPRITES.lootcrate, 40, 40);
+      else { ctx.fillStyle = '#8d6e63'; ctx.fillRect(-16, -16, 32, 32); }
+    }
+    ctx.restore();
+  }
+  // RAPTOR-2 — the on-call gunship wheeling around the player
+  if (game.supportHeli) {
+    const sh = game.supportHeli;
+    ctx.save();
+    ctx.translate(sh.x, sh.y);
+    ctx.save();
+    ctx.translate(30, 88);
+    ctx.rotate(sh.ang || 0);
+    ctx.globalAlpha = 0.28;
+    ctx.filter = 'brightness(0)';
+    if (SPRITES.gunship) drawSpriteFit(SPRITES.gunship, 190, 190);
+    ctx.filter = 'none';
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.rotate(sh.ang || 0);
+    if (SPRITES.gunship) drawSpriteFit(SPRITES.gunship, 190, 190);
+    else { ctx.fillStyle = '#37474f'; ctx.fillRect(-70, -22, 130, 44); }
+    // rotor shimmer
+    ctx.rotate(performance.now() / 24);
+    ctx.strokeStyle = 'rgba(220,226,232,0.4)';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(-78, 0); ctx.lineTo(78, 0);
+    ctx.moveTo(0, -78); ctx.lineTo(0, 78);
+    ctx.stroke();
+    ctx.restore();
+    if (sh.tracer && sh.tracerT > 0) {
+      ctx.strokeStyle = 'rgba(255,138,101,0.9)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(sh.x, sh.y);
+      ctx.lineTo(sh.tracer.x, sh.tracer.y);
+      ctx.stroke();
+      ctx.fillStyle = '#ff8a65';
+      ctx.beginPath();
+      ctx.arc(sh.tracer.x, sh.tracer.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   // EVAC-1 — the extraction bird
   if (game.extract) {
     const ex = game.extract;
@@ -7104,6 +7295,10 @@ window.__dz = {
   blackout: () => !!(game && game.blackout),
   paused: () => paused,
   extract: () => (game && game.extract ? game.extract.phase : null),
+  heli: () => !!(game && game.supportHeli),
+  airdrops: () => (game && game.airdrops ? game.airdrops.length : -1),
+  dropSupplies: () => { if (game) { game.supplyT = 0.05; return true; } return false; },
+  airState: () => (game ? { supplyT: game.supplyT, bombers: game.bombers.length, mode: gameMode, drops: (game.airdrops || []).length } : null),
   forceLastWave: () => {
     if (!game) return false;
     game.wave = level().waves;
