@@ -1831,18 +1831,21 @@ function update(dt) {
       } else {
         addShake(0.5);
       }
+      // the barrel rides ~15px left-perpendicular of the aim axis in the art —
+      // muzzle math matches so rounds visibly leave the RIFLE, not the chest
+      const bpx = -Math.sin(p.angle) * -15, bpy = Math.cos(p.angle) * -15;
       // eject a shell casing perpendicular to the barrel
       const ca = p.angle + Math.PI / 2 + (Math.random() - 0.5) * 0.6;
       g.casings.push({
-        x: p.x + Math.cos(p.angle) * p.radius, y: p.y + Math.sin(p.angle) * p.radius,
+        x: p.x + Math.cos(p.angle) * p.radius + bpx, y: p.y + Math.sin(p.angle) * p.radius + bpy,
         vx: Math.cos(ca) * (120 + Math.random() * 80), vy: Math.sin(ca) * (120 + Math.random() * 80),
         rot: Math.random() * Math.PI, rotV: (Math.random() - 0.5) * 20, life: 0.6,
       });
       for (let i = 0; i < ws.pellets; i++) {
         const a = p.angle + (Math.random() - 0.5) * 2 * ws.spread;
         g.bullets.push({
-          x: p.x + Math.cos(p.angle) * (p.radius + 10),
-          y: p.y + Math.sin(p.angle) * (p.radius + 10),
+          x: p.x + Math.cos(p.angle) * (p.radius + 14) + bpx,
+          y: p.y + Math.sin(p.angle) * (p.radius + 14) + bpy,
           vx: Math.cos(a) * ws.bulletSpeed,
           vy: Math.sin(a) * ws.bulletSpeed,
           damage: ws.damage * squadDmgMult() * (1 + (g.overclock || 0)), color: ws.color,
@@ -4332,19 +4335,19 @@ function drawPlayer() {
     if (p.weapon === 'flamer' && SPRITES.flamecone) {
       const ff = 0.9 + 0.25 * Math.sin(performance.now() / 35);
       ctx.save();
-      ctx.translate(p.radius + 64, 0);
+      ctx.translate(p.radius + 60, -15);
       ctx.globalAlpha = 0.92;
       drawSpriteFit(SPRITES.flamecone, 120 * ff, 64 * ff);
       ctx.restore();
     } else if (SPRITES.muzzle) {
       ctx.save();
-      ctx.translate(p.radius + 24, 0);
+      ctx.translate(p.radius + 26, -15);
       drawSpriteFit(SPRITES.muzzle, settings.arcade ? 52 : 34, settings.arcade ? 36 : 24);
       ctx.restore();
     } else {
       ctx.fillStyle = '#ffe082';
       ctx.beginPath();
-      ctx.arc(p.radius + 18, 0, 7, 0, Math.PI * 2);
+      ctx.arc(p.radius + 20, -15, 7, 0, Math.PI * 2);
       ctx.fill();
     }
   }
