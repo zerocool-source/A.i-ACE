@@ -1,0 +1,48 @@
+name: Deploy DEAD ZONE to GitHub Pages
+
+on:
+  push:
+    # The github-pages environment must allow these branches
+    # (Settings -> Environments -> github-pages -> deployment branches).
+    branches:
+      - claude/keen-keller-6cwOk # default branch
+      - claude/admiring-cannon-p0epgo
+    paths:
+      - 'dead-zone/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        working-directory: dead-zone
+        run: npm ci
+      - name: Build (served under /A.i-ACE/)
+        working-directory: dead-zone
+        run: npm run build -- --base=/A.i-ACE/
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dead-zone/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
